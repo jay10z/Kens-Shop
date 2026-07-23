@@ -19,6 +19,10 @@
     {
       "source": "/cart",
       "destination": "/index.html"
+    },
+    {
+      "source": "/api/track",
+      "destination": "/api/track.js"
     }
   ],
   "env": {
