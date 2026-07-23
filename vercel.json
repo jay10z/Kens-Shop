@@ -30,5 +30,11 @@
     "VITE_GOOGLE_AUTH_PROXY": "https://designarena.ai/auth/google/callback",
     "FULLSTACK_PROJECT_REF": "atehfwvgcblxkflzlocs",
     "FULLSTACK_RESTORE_API_URL": "https://designarena.ai/api/fullstack-restore"
+  },
+  "build": {
+    "env": {
+      "VITE_SUPABASE_URL": "https://atehfwvgcblxkflzlocs.supabase.co",
+      "VITE_SUPABASE_ANON_KEY": "sb_publishable_t5maXp5eDecw7jyWYgTqgw_aQHLLhOn"
+    }
   }
 }
