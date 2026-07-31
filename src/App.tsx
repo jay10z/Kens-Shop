@@ -1,15 +1,38 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Star, Trash2, TrendingUp, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Star, Sun, Trash2, TrendingUp, X } from 'lucide-react';
+
+// ── Theme ──────────────────────────────────────────────
+function useTheme() {
+  const [theme, setTheme] = useState<'light'|'dark'>(() => {
+    const saved = localStorage.getItem('ks-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('ks-theme', theme);
+  }, [theme]);
+  const toggle = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
+  return { theme, toggle };
+}
+// Global theme context
+let _themeToggle: (() => void) | null = null;
+let _theme: 'light'|'dark' = 'dark';
+function ThemeProvider({children}:{children:React.ReactNode}){
+  const {theme,toggle}=useTheme();
+  _themeToggle=toggle; _theme=theme;
+  return <>{children}</>;
+}
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
 import supabase from './lib/supabase';
 const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
 async function api(path:string, options?:RequestInit){const r=await fetch(path,options);const d=await r.json();if(!r.ok)throw new Error(d.error||'Something went wrong');return d}
 function Toast({text,onClose}:{text:string;onClose:()=>void}){useEffect(()=>{const t=setTimeout(onClose,2600);return()=>clearTimeout(t)},[onClose]);return <motion.div initial={{y:20,opacity:0}} animate={{y:0,opacity:1}} exit={{y:20,opacity:0}} className="toast"><Check size={16}/>{text}</motion.div>}
-function Header(){const {count}=useCart();const [open,setOpen]=useState(false);return <header className="header"><Link to="/" className="brand">KENS <span>SHOP</span></Link><nav className={open?'nav open':'nav'}>{[['/','Home'],['/shop','Catalog']].map(([to,n])=><Link key={n} to={to} onClick={()=>setOpen(false)}>{n}</Link>)}</nav><div className="head-actions"><Link to="/cart" className="bag" aria-label="Cart"><ShoppingBag/><b>{count}</b></Link><button className="menu" onClick={()=>setOpen(!open)} aria-label="Menu">{open?<X/>:<Menu/>}</button></div></header>}
-function Footer(){return <footer><div><Link to="/" className="brand inverse">KENS <span>SHOP</span></Link><p>A small, considered catalog of perfumes, watches, jewelry and accessories.</p></div><div><b>Shop</b><Link to="/shop">View catalog</Link><a href="https://wa.me/15551234567">WhatsApp</a></div><div><b>Contact</b><a href="https://instagram.com" target="_blank">Instagram</a><a href="mailto:concierge@kensshop.com">Email</a></div><small>© 2025 KENS SHOP.</small></footer>}
+function Header(){const {count}=useCart();const [open,setOpen]=useState(false);return <header className="header"><Link to="/" className="brand">Ken's <span>Shop</span></Link><nav className={open?'nav open':'nav'}>{[['/',"Accueil"],['/shop',"Boutique"]].map(([to,n])=><Link key={n} to={to} onClick={()=>setOpen(false)}>{n}</Link>)}</nav><div className="head-actions"><button className="theme-toggle" onClick={()=>_themeToggle?.()} aria-label="Changer le thème" title={_theme==='dark'?'Mode clair':'Mode sombre'}>{_theme==='dark'?<Sun/>:<Moon/>}</button><Link to="/cart" className="bag" aria-label="Panier"><ShoppingBag/><b>{count}</b></Link><button className="menu" onClick={()=>setOpen(!open)} aria-label="Menu">{open?<X/>:<Menu/>}</button></div></header>}
+function Footer(){return <footer><div><Link to="/" className="brand inverse">Ken's <span>Shop</span></Link><p>Une sélection raffinée de parfums, montres, bijoux et accessoires de luxe.</p></div><div><b>Boutique</b><Link to="/shop">Voir le catalogue</Link><a href="https://wa.me/15551234567">WhatsApp</a></div><div><b>Contact</b><a href="https://instagram.com" target="_blank">Instagram</a><a href="mailto:contact@kensshop.com">E-mail</a></div><small>© 2025 Ken's Shop. Tous droits réservés.</small></footer>}
 function Layout({children}:{children:React.ReactNode}){return <><Header/><main>{children}</main><Footer/><a className="float-wa" href="https://wa.me/15551234567" target="_blank" aria-label="WhatsApp"><MessageCircle/></a></>}
 function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
   const {add}=useCart();
@@ -31,7 +54,7 @@ function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
       <p>{p.short_description}</p>
       <div className="product-row">
         <strong>{money(p.price)}</strong>
-        <button onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={!p.stock_quantity} aria-label="Add to cart"><Plus/> Add</button>
+        <button onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={!p.stock_quantity} aria-label="Ajouter au panier"><Plus/> Ajouter</button>
       </div>
     </div>
   </article>
@@ -52,22 +75,22 @@ function Home(){
     <section className="hero">
       <div className="hero-bg"/>
       <motion.div initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
-        <p className="eyebrow gold">KENS SHOP</p>
-        <h1>Quiet luxury.<br/><em>Simply chosen.</em></h1>
-        <p>A small catalog of exceptional perfumes, watches, jewelry and accessories.</p>
-        <Link className="btn gold-btn" to="/shop">Explore the collection <ArrowRight/></Link>
+        <p className="eyebrow gold">KEN'S SHOP</p>
+        <h1>Le luxe discret.<br/><em>Simplement choisi.</em></h1>
+        <p>Une sélection de parfums, montres, bijoux et accessoires d'exception.</p>
+        <Link className="btn gold-btn" to="/shop">Découvrir la collection <ArrowRight/></Link>
       </motion.div>
     </section>
     {loading?<Loading/>:<>
-      {featured.length>0&&<ProductSection title="Featured Collection" subtitle="HANDPICKED" products={featured} onAdded={()=>setToast('Added to your bag')}/>}
-      {trending.length>0&&<ProductSection title="Trending Now" subtitle="MOST DESIRED" products={trending} onAdded={()=>setToast('Added to your bag')}/>}
-      {bestSellers.length>0&&<ProductSection title="Best Sellers" subtitle="CLASSICS" products={bestSellers} onAdded={()=>setToast('Added to your bag')}/>}
-      {arrivals.length>0&&<ProductSection title="New Arrivals" subtitle="RECENTLY ADDED" products={arrivals} onAdded={()=>setToast('Added to your bag')}/>}
+      {featured.length>0&&<ProductSection title="Sélection Vedette" subtitle="CHOIX DU GÉRANT" products={featured} onAdded={()=>setToast('Ajouté à votre sac')}/>}
+      {trending.length>0&&<ProductSection title="Tendances du Moment" subtitle="LES PLUS DÉSIRÉS" products={trending} onAdded={()=>setToast('Ajouté à votre sac')}/>}
+      {bestSellers.length>0&&<ProductSection title="Meilleures Ventes" subtitle="LES CLASSIQUES" products={bestSellers} onAdded={()=>setToast('Ajouté à votre sac')}/>}
+      {arrivals.length>0&&<ProductSection title="Nouveautés" subtitle="RÉCEMMENT AJOUTÉS" products={arrivals} onAdded={()=>setToast('Ajouté à votre sac')}/>}
       <section className="simple-contact">
         <div>
-          <p className="eyebrow gold">PERSONAL SERVICE</p>
-          <h2>Questions? Message us.</h2>
-          <p>We confirm availability, delivery and payment with you directly.</p>
+          <p className="eyebrow gold">SERVICE PERSONNALISÉ</p>
+          <h2>Des questions ? Écrivez-nous.</h2>
+          <p>Nous confirmons la disponibilité, la livraison et le paiement directement avec vous.</p>
         </div>
         <a href="https://wa.me/15551234567" className="btn gold-btn"><MessageCircle/> WhatsApp</a>
       </section>
@@ -75,8 +98,8 @@ function Home(){
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
   </Layout>
 }
-function ProductSection({title,subtitle,products,onAdded}:{title:string;subtitle:string;products:Product[];onAdded:()=>void}){return <section className="products-section"><div className="section-head"><div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div><Link to="/shop">View all <ArrowRight/></Link></div><div className="product-grid">{products.map(p=><ProductCard key={p.id} p={p} onAdded={onAdded}/>)}</div></section>}
-function Loading(){return <div className="loading"><Loader2 className="spin"/><span>Curating your experience…</span></div>}
+function ProductSection({title,subtitle,products,onAdded}:{title:string;subtitle:string;products:Product[];onAdded:()=>void}){return <section className="products-section"><div className="section-head"><div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div><Link to="/shop">Voir tout <ArrowRight/></Link></div><div className="product-grid">{products.map(p=><ProductCard key={p.id} p={p} onAdded={onAdded}/>)}</div></section>}
+function Loading(){return <div className="loading"><Loader2 className="spin"/><span>Préparation de votre expérience…</span></div>}
 function Shop(){
   const [products,setProducts]=useState<Product[]>([]);
   const [cats,setCats]=useState<any[]>([]);
@@ -278,4 +301,4 @@ const statuses=['Pending','Discussing on WhatsApp','Confirmed','Preparing','Out 
 function Status({status}:{status:string}){return <span className={`status s-${status.toLowerCase().replaceAll(' ','-')}`}>{status}</span>}
 function AdminOrders(){const [orders,setOrders]=useState<any[]>([]);const [selected,setSelected]=useState<any>(null);const [q,setQ]=useState('');const [filter,setFilter]=useState('All');const {session}=useAuth();const load=()=>api('/api/orders',{headers:authHeaders(session?.access_token)}).then(setOrders);useEffect(()=>{load()},[]);const shown=orders.filter(o=>(filter==='All'||o.status===filter)&&(o.order_number.toLowerCase().includes(q.toLowerCase())||(o.customer_name||'').toLowerCase().includes(q.toLowerCase())));return <AdminShell><section className="admin-content"><div className="admin-title"><div><p className="eyebrow gold">CLIENT ORDERS</p><h1>Orders</h1></div></div><div className="order-tools"><label className="admin-search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Order number or client"/></label><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option>{statuses.map(s=><option>{s}</option>)}</select></div><div className="order-list">{shown.map(o=><button key={o.id} onClick={()=>setSelected(o)}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleString()}</span></div><div><b>{o.customer_name||'WhatsApp client'}</b><span>{o.items?.length} items</span></div><strong>{money(o.total)}</strong><Status status={o.status}/><ChevronRight/></button>)}</div>{!shown.length&&<Empty text="No orders found."/>}{selected&&<OrderDrawer order={selected} token={session?.access_token} close={()=>setSelected(null)} done={()=>{setSelected(null);load()}}/>}</section></AdminShell>}
 function OrderDrawer({order,token,close,done}:any){const [form,setForm]=useState({...order});const [busy,setBusy]=useState(false);const set=(k:string,v:any)=>setForm((x:any)=>({...x,[k]:v}));const save=async(status?:string)=>{setBusy(true);await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({...form,status:status||form.status})});setBusy(false);done()};const wa=form.whatsapp_number?.replace(/\D/g,'')||'15551234567';return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2>Order details</h2></div><button onClick={close}><X/></button></div><Status status={form.status}/><div className="drawer-items">{form.items.map((x:any)=><div><img src={x.product?.images?.[0]}/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · Qty {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>Total</span><b>{money(form.total)}</b></div><h3>Customer information</h3><div className="form-grid"><label>Name<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>WhatsApp number<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">Address<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">GPS location<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>Payment method<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>Delivery instructions<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">Status<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option>{s}</option>)}</select></label></div><div className="quick"><a href={`https://wa.me/${wa}?text=${encodeURIComponent(`Hello, regarding order ${form.order_number}`)}`} target="_blank"><MessageCircle/> WhatsApp</a><button onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> Address</button><button onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> GPS</button></div><div className="modal-actions"><button className="danger" onClick={()=>save('Cancelled')}>Cancel order</button><button className="btn dark-btn" onClick={()=>save('Delivered')}>Mark delivered</button><button className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} Save</button></div></aside></div>}
-export default function App(){return <Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/products" replace/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes>}
+export default function App(){return <ThemeProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/products" replace/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></ThemeProvider>}
