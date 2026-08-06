@@ -2,6 +2,8 @@
 -- Safe for new environments. For existing databases, apply:
 --   1) sprint1_task1_1_migration.sql
 --   2) sprint1_task1_1_schema_hardening.sql
+--   3) phase4_hero_slides_migration.sql
+--   4) phase4_categories_migration.sql
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -91,6 +93,18 @@ CREATE TABLE IF NOT EXISTS faqs (
   display_order INTEGER NOT NULL DEFAULT 0 CHECK (display_order >= 0)
 );
 
+CREATE TABLE IF NOT EXISTS hero_slides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  image_url TEXT NOT NULL,
+  title TEXT,
+  subtitle TEXT,
+  cta_label TEXT,
+  cta_href TEXT DEFAULT '/shop',
+  display_order INTEGER NOT NULL DEFAULT 0 CHECK (display_order >= 0),
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 CREATE INDEX IF NOT EXISTS idx_categories_display_order ON categories(display_order);
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
 CREATE INDEX IF NOT EXISTS idx_products_hidden ON products(hidden);
@@ -103,6 +117,8 @@ CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id)
 CREATE INDEX IF NOT EXISTS idx_product_events_product_id ON product_events(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_events_created_at ON product_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_product_events_type_created_at ON product_events(event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_hero_slides_display_order ON hero_slides(display_order);
+CREATE INDEX IF NOT EXISTS idx_hero_slides_enabled ON hero_slides(enabled);
 
 -- Note: If you use Supabase Storage for product images,
 -- create a bucket such as `product-images` in the Supabase dashboard.

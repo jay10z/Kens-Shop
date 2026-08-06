@@ -21,14 +21,13 @@ async function seed() {
   await supabase.from('product_events').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   await supabase.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   await supabase.from('categories').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('hero_slides').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
   console.log("2. Inserting categories...");
   const categories = [
     { name: 'Perfumes', display_order: 1 },
     { name: 'Watches', display_order: 2 },
-    { name: 'Jewelry', display_order: 3 },
-    { name: 'Bracelets', display_order: 4 },
-    { name: 'Accessories', display_order: 5 }
+    { name: 'Accessories', display_order: 3 },
   ];
 
   const { data: catData, error: catErr } = await supabase.from('categories').insert(categories).select();
@@ -54,30 +53,23 @@ async function seed() {
     { name: 'Silver Minimalist', category: 'Watches', short: 'Sleek everyday wear', price: 1200, stock: 18, images: ['https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=800&q=80'] },
     { name: 'Pilot Heritage', category: 'Watches', short: 'Aviation inspired design', price: 5600, stock: 4, images: ['https://images.unsplash.com/photo-1542496658-e33a6d0d50f6?auto=format&fit=crop&w=800&q=80'] },
     
-    // Jewelry & Bracelets
-    { name: 'Collier Diamant', category: 'Jewelry', short: 'Solitaire diamond necklace', price: 2100, stock: 6, images: ['https://images.unsplash.com/photo-1599643478524-fb66645365ea?auto=format&fit=crop&w=800&q=80'], featured: true },
-    { name: 'Bague Éternité', category: 'Jewelry', short: 'Sapphire and diamond ring', price: 3400, stock: 3, images: ['https://images.unsplash.com/photo-1605100804763-247f67b8548e?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Bracelet Maille', category: 'Bracelets', short: 'Gold link bracelet', price: 890, stock: 14, images: ['https://images.unsplash.com/photo-1611591437281-460bfbe1220a?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Cuff Minimal', category: 'Bracelets', short: 'Silver open cuff', price: 450, stock: 22, images: ['https://images.unsplash.com/photo-1573408301145-b98c46544665?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Boucles Perles', category: 'Jewelry', short: 'Akoya pearl earrings', price: 650, stock: 0, images: ['https://images.unsplash.com/photo-1535632066927-ab7c9ab60908?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Charm Bracelet', category: 'Bracelets', short: 'Customizable gold charms', price: 1100, stock: 9, images: ['https://images.unsplash.com/photo-1611591437281-460bfbe1220a?auto=format&fit=crop&w=800&q=80'] },
-    
-    // Accessories
+    // Accessories (wallets, key holders, and related pieces)
     { name: 'Leather Wallet', category: 'Accessories', short: 'Hand-stitched calf leather', price: 350, stock: 30, images: ['https://images.unsplash.com/photo-1627123424574-724758594e93?auto=format&fit=crop&w=800&q=80'] },
     { name: 'Silk Scarf', category: 'Accessories', short: 'Printed monogram silk', price: 280, stock: 12, images: ['https://images.unsplash.com/photo-1584916201218-f4242ceb4809?auto=format&fit=crop&w=800&q=80'] },
     { name: 'Sunglasses Aviator', category: 'Accessories', short: 'Polarized gold frames', price: 420, stock: 7, images: ['https://images.unsplash.com/photo-1511499767150-a48a237f0083?auto=format&fit=crop&w=800&q=80'], featured: true },
     { name: 'Travel Pouch', category: 'Accessories', short: 'Canvas and leather mix', price: 550, stock: 4, images: ['https://images.unsplash.com/photo-1547949003-9792a18a2601?auto=format&fit=crop&w=800&q=80'], low_stock_threshold: 5 },
     { name: 'Card Holder', category: 'Accessories', short: 'Slim minimalist design', price: 190, stock: 45, images: ['https://images.unsplash.com/photo-1601004890684-d8cbf643f5f2?auto=format&fit=crop&w=800&q=80'] },
+    { name: 'Key Holder', category: 'Accessories', short: 'Woven leather key holder', price: 120, stock: 50, images: ['https://images.unsplash.com/photo-1601004890684-d8cbf643f5f2?auto=format&fit=crop&w=800&q=80'] },
+    { name: 'Collier Diamant', category: 'Accessories', short: 'Solitaire diamond necklace', price: 2100, stock: 6, images: ['https://images.unsplash.com/photo-1599643478524-fb66645365ea?auto=format&fit=crop&w=800&q=80'], featured: true },
+    { name: 'Bague Éternité', category: 'Accessories', short: 'Sapphire and diamond ring', price: 3400, stock: 3, images: ['https://images.unsplash.com/photo-1605100804763-247f67b8548e?auto=format&fit=crop&w=800&q=80'] },
+    { name: 'Bracelet Maille', category: 'Accessories', short: 'Gold link bracelet', price: 890, stock: 14, images: ['https://images.unsplash.com/photo-1611591437281-460bfbe1220a?auto=format&fit=crop&w=800&q=80'] },
+    { name: 'Cuff Minimal', category: 'Accessories', short: 'Silver open cuff', price: 450, stock: 22, images: ['https://images.unsplash.com/photo-1573408301145-b98c46544665?auto=format&fit=crop&w=800&q=80'] },
     
     // More mix
     { name: 'Oud Mystique', category: 'Perfumes', short: 'Intense oriental blend', price: 410, stock: 5, images: ['https://images.unsplash.com/photo-1594035910387-fea47794261f?auto=format&fit=crop&w=800&q=80'] },
     { name: 'Rose Précieuse', category: 'Perfumes', short: 'Delicate summer floral', price: 230, stock: 11, images: ['https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?auto=format&fit=crop&w=800&q=80'], hidden: true },
     { name: 'Montre Éclipse', category: 'Watches', short: 'Black titanium case', price: 6200, stock: 2, images: ['https://images.unsplash.com/photo-1524592094714-0f0654e20314?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Bracelet Jonc', category: 'Bracelets', short: 'Solid gold bangle', price: 1450, stock: 8, images: ['https://images.unsplash.com/photo-1611591437281-460bfbe1220a?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Collier Perles', category: 'Jewelry', short: 'Classic pearl strand', price: 950, stock: 15, images: ['https://images.unsplash.com/photo-1599643478524-fb66645365ea?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Bague Saphir', category: 'Jewelry', short: 'Blue sapphire center', price: 2800, stock: 1, images: ['https://images.unsplash.com/photo-1605100804763-247f67b8548e?auto=format&fit=crop&w=800&q=80'], low_stock_threshold: 2 },
     { name: 'Sac Hobo', category: 'Accessories', short: 'Slouchy leather bag', price: 1850, stock: 6, images: ['https://images.unsplash.com/photo-1584916201218-f4242ceb4809?auto=format&fit=crop&w=800&q=80'] },
-    { name: 'Porte-Clés', category: 'Accessories', short: 'Woven leather keychain', price: 120, stock: 50, images: ['https://images.unsplash.com/photo-1601004890684-d8cbf643f5f2?auto=format&fit=crop&w=800&q=80'] }
   ];
 
   const dbProducts = products.map((p, i) => ({
@@ -185,7 +177,38 @@ async function seed() {
   
   await supabase.from('order_items').insert(allOrderItems);
 
-  console.log("Done! Seeded categories, products, analytics events, and orders successfully.");
+  console.log("6. Inserting hero slides...");
+  await supabase.from('hero_slides').insert([
+    {
+      image_url: 'https://images.unsplash.com/photo-1541643600914-78b084683601?auto=format&fit=crop&w=2000&q=88',
+      title: 'Quiet luxury.',
+      subtitle: 'A considered collection of perfumes, watches and accessories.',
+      cta_label: 'Explore the collection',
+      cta_href: '/shop',
+      display_order: 1,
+      enabled: true,
+    },
+    {
+      image_url: 'https://images.unsplash.com/photo-1524592094714-0f0654e20314?auto=format&fit=crop&w=2000&q=88',
+      title: 'Time, refined.',
+      subtitle: 'Exceptional watches selected for presence and precision.',
+      cta_label: 'View watches',
+      cta_href: '/shop',
+      display_order: 2,
+      enabled: true,
+    },
+    {
+      image_url: 'https://images.unsplash.com/photo-1594035910387-fea47794261f?auto=format&fit=crop&w=2000&q=88',
+      title: 'Scent & presence.',
+      subtitle: 'Signature fragrances for evenings that linger.',
+      cta_label: 'Discover perfumes',
+      cta_href: '/shop',
+      display_order: 3,
+      enabled: true,
+    },
+  ]);
+
+  console.log("Done! Seeded categories, products, hero slides, analytics events, and orders successfully.");
 }
 
 seed().catch(console.error);

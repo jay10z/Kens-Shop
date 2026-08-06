@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Star, Sun, Trash2, TrendingUp, Truck, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, X } from 'lucide-react';
+import { BRAND, SOCIAL, whatsappUrl, DEFAULT_HERO_SLIDES } from './lib/brand';
 
 // ── Theme ──────────────────────────────────────────────
 function useTheme() {
@@ -31,18 +32,55 @@ import { useAuth } from './contexts/AuthContext';
 import supabase from './lib/supabase';
 const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
 async function api(path:string, options?:RequestInit){const r=await fetch(path,options);const d=await r.json();if(!r.ok)throw new Error(d.error||'Something went wrong');return d}
+/** Same inventory levels as api/ranking.js — Healthy=1, Low=2, Out=3 */
+function resolveStockPriority(p:{stock_quantity?:number;low_stock_threshold?:number;stockPriority?:number}){
+  if(p.stockPriority===1||p.stockPriority===2||p.stockPriority===3)return p.stockPriority;
+  const qty=p.stock_quantity??0;
+  const threshold=p.low_stock_threshold??5;
+  if(qty===0)return 3;
+  if(qty<=threshold)return 2;
+  return 1;
+}
+function InventoryBadge({p}:{p:Product}){
+  const {t}=useI18n();
+  const level=resolveStockPriority(p);
+  const label=level===1?t('product.inStock'):level===2?t('product.limitedStock'):t('product.outOfStock');
+  const dot=level===1?'🟢':level===2?'🟡':'🔴';
+  return <span className="inventory-badge" style={{background:'rgba(0,0,0,0.8)',color:'#fff',fontSize:'11px',padding:'4px 8px',borderRadius:'4px'}}>{dot} {label}</span>;
+}
 function Toast({text,onClose}:{text:string;onClose:()=>void}){useEffect(()=>{const t=setTimeout(onClose,2600);return()=>clearTimeout(t)},[onClose]);return <motion.div initial={{y:20,opacity:0}} animate={{y:0,opacity:1}} exit={{y:20,opacity:0}} className="toast"><Check size={16}/>{text}</motion.div>}
+function BrandMark({className='',to='/'}:{className?:string;to?:string}){
+  return <Link to={to} className={`brand ${className}`} aria-label={BRAND.fullName}>
+    <span className="brand-main">{BRAND.name}</span>
+    <span className="brand-accent">{BRAND.nameAccent}</span>
+    {BRAND.slogan?<span className="brand-slogan">{BRAND.slogan}</span>:null}
+  </Link>;
+}
+function TikTokIcon({size=18}:{size?:number}){
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.15 15.2a6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.73a8.19 8.19 0 0 0 4.76 1.52V6.84a4.84 4.84 0 0 1-1-.15z"/></svg>;
+}
+function SocialLinks({className=''}:{className?:string}){
+  return <div className={`social-links ${className}`}>
+    <a href={whatsappUrl()} target="_blank" rel="noreferrer" aria-label="WhatsApp"><MessageCircle size={18}/></a>
+    <a href={SOCIAL.instagramUrl} target="_blank" rel="noreferrer" aria-label="Instagram"><Instagram size={18}/></a>
+    <a href={SOCIAL.tiktokUrl} target="_blank" rel="noreferrer" aria-label="TikTok"><TikTokIcon/></a>
+  </div>;
+}
 function Header(){
   const {count}=useCart();
   const [open,setOpen]=useState(false);
+  const [cats,setCats]=useState<any[]>([]);
   const {t, lang, setLang}=useI18n();
+  useEffect(()=>{api('/api/categories').then(setCats).catch(()=>{})},[]);
   return <header className="header">
-    <Link to="/" className="brand">Ken's <span>Shop</span></Link>
+    <BrandMark/>
     <nav className={open?'nav open':'nav'}>
       <Link to="/" onClick={()=>setOpen(false)}>{t('nav.home')}</Link>
       <Link to="/shop" onClick={()=>setOpen(false)}>{t('nav.catalog')}</Link>
+      {cats.map(c=><Link key={c.id} to={`/shop?category=${c.id}`} onClick={()=>setOpen(false)}>{c.name}</Link>)}
     </nav>
     <div className="head-actions">
+      <SocialLinks className="header-social"/>
       <button className="theme-toggle" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label="Lang" style={{fontSize: '11px', fontWeight:'bold', letterSpacing:'1px'}}>{lang.toUpperCase()}</button>
       <button className="theme-toggle" onClick={()=>_themeToggle?.()} aria-label="Theme" title={_theme==='dark'?t('header.themeLight'):t('header.themeDark')}>{_theme==='dark'?<Sun/>:<Moon/>}</button>
       <Link to="/cart" className="bag" aria-label={t('header.cart')}><ShoppingBag/><b>{count}</b></Link>
@@ -50,22 +88,143 @@ function Header(){
     </div>
   </header>
 }
-function Footer(){const {t}=useI18n();return <footer><div><Link to="/" className="brand inverse">Ken's <span>Shop</span></Link><p>{t('footer.description')}</p></div><div><b>{t('footer.shopTitle')}</b><Link to="/shop">{t('footer.viewCatalog')}</Link><a href="https://wa.me/15551234567">WhatsApp</a></div><div><b>{t('footer.contactTitle')}</b><a href="https://instagram.com" target="_blank">Instagram</a><a href="mailto:contact@kensshop.com">E-mail</a></div><small>{t('footer.copyright')}</small></footer>}
-function Layout({children}:{children:React.ReactNode}){return <><Header/><main>{children}</main><Footer/><a className="float-wa" href="https://wa.me/15551234567" target="_blank" aria-label="WhatsApp"><MessageCircle/></a></>}
+function Footer(){
+  const {t}=useI18n();
+  return <footer>
+    <div>
+      <BrandMark className="inverse"/>
+      <p>{t('footer.description')}</p>
+      <SocialLinks className="footer-social"/>
+    </div>
+    <div>
+      <b>{t('footer.shopTitle')}</b>
+      <Link to="/shop">{t('footer.viewCatalog')}</Link>
+    </div>
+    <div>
+      <b>{t('footer.contactTitle')}</b>
+      <a href={whatsappUrl()} target="_blank" rel="noreferrer">WhatsApp</a>
+      <a href={SOCIAL.instagramUrl} target="_blank" rel="noreferrer">Instagram</a>
+      <a href={SOCIAL.tiktokUrl} target="_blank" rel="noreferrer">TikTok</a>
+      <a href={`mailto:${SOCIAL.email}`}>E-mail</a>
+    </div>
+    <small>{t('footer.copyright')}</small>
+  </footer>;
+}
+function Layout({children}:{children:React.ReactNode}){
+  return <><Header/><main>{children}</main><Footer/><a className="float-wa" href={whatsappUrl()} target="_blank" rel="noreferrer" aria-label="WhatsApp"><MessageCircle/></a></>;
+}
+function HeroSlider(){
+  const [slides,setSlides]=useState<any[]>(DEFAULT_HERO_SLIDES);
+  const [index,setIndex]=useState(0);
+  const [paused,setPaused]=useState(false);
+  const touchX=useRef<number|null>(null);
+  const {t}=useI18n();
+
+  useEffect(()=>{
+    api('/api/hero').then((data)=>{
+      if(Array.isArray(data)&&data.length)setSlides(data);
+    }).catch(()=>{});
+  },[]);
+
+  useEffect(()=>{
+    if(paused||slides.length<=1)return;
+    const id=setInterval(()=>setIndex(i=>(i+1)%slides.length),5500);
+    return ()=>clearInterval(id);
+  },[paused,slides.length]);
+
+  const go=(dir:number)=>setIndex(i=>(i+dir+slides.length)%slides.length);
+  const slide=slides[index]||slides[0];
+  if(!slide)return null;
+
+  return (
+    <section
+      className="hero hero-slider"
+      onMouseEnter={()=>setPaused(true)}
+      onMouseLeave={()=>setPaused(false)}
+      onFocusCapture={()=>setPaused(true)}
+      onBlurCapture={()=>setPaused(false)}
+      onTouchStart={(e)=>{touchX.current=e.touches[0].clientX;setPaused(true)}}
+      onTouchEnd={(e)=>{
+        if(touchX.current==null)return;
+        const dx=e.changedTouches[0].clientX-touchX.current;
+        if(Math.abs(dx)>40)go(dx<0?1:-1);
+        touchX.current=null;
+        setPaused(false);
+      }}
+    >
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={slide.id||index}
+          className="hero-slide"
+          initial={{opacity:0,scale:1.04}}
+          animate={{opacity:1,scale:1}}
+          exit={{opacity:0}}
+          transition={{duration:0.9,ease:[0.22,1,0.36,1]}}
+          style={{backgroundImage:`linear-gradient(105deg,rgba(5,5,4,.78) 0%,rgba(5,5,4,.35) 48%,rgba(5,5,4,.15) 100%),url(${slide.image_url})`}}
+        />
+      </AnimatePresence>
+      <div className="hero-content">
+        <p className="eyebrow gold">{BRAND.fullName}</p>
+        {slide.title?<motion.h1 key={`t-${slide.id||index}`} initial={{opacity:0,y:18}} animate={{opacity:1,y:0}} transition={{delay:0.15}}>{slide.title}</motion.h1>:null}
+        {slide.subtitle?<motion.p key={`s-${slide.id||index}`} className="hero-sub" initial={{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{delay:0.25}}>{slide.subtitle}</motion.p>:null}
+        {(slide.cta_label||slide.cta_href)?(
+          <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.35}}>
+            <Link className="btn gold-btn" to={slide.cta_href||'/shop'}>{slide.cta_label||t('home.exploreBtn')} <ArrowRight/></Link>
+          </motion.div>
+        ):null}
+      </div>
+      {slides.length>1&&<>
+        <button className="hero-nav prev" onClick={()=>go(-1)} aria-label="Previous slide"><ChevronLeft/></button>
+        <button className="hero-nav next" onClick={()=>go(1)} aria-label="Next slide"><ChevronRight/></button>
+        <div className="hero-dots" role="tablist" aria-label="Hero slides">
+          {slides.map((s:any,i:number)=>(
+            <button key={s.id||i} className={i===index?'active':''} onClick={()=>setIndex(i)} aria-label={`Slide ${i+1}`}/>
+          ))}
+        </div>
+      </>}
+    </section>
+  );
+}
+function CategoryStrip({cats}:{cats:any[]}){
+  const {t}=useI18n();
+  if(!cats.length)return null;
+  const images:Record<string,string>={
+    Perfumes:'https://images.unsplash.com/photo-1594035910387-fea47794261f?auto=format&fit=crop&w=900&q=80',
+    Watches:'https://images.unsplash.com/photo-1524592094714-0f0654e20314?auto=format&fit=crop&w=900&q=80',
+    Accessories:'https://images.unsplash.com/photo-1627123424574-724758594e93?auto=format&fit=crop&w=900&q=80',
+  };
+  return <section className="category-strip">
+    <div className="section-head">
+      <div>
+        <p className="eyebrow">{t('home.categoriesSub')}</p>
+        <h2>{t('home.categoriesTitle')}</h2>
+      </div>
+      <Link to="/shop">{t('home.viewAll')} <ArrowRight/></Link>
+    </div>
+    <div className="category-grid">
+      {cats.map(c=>(
+        <Link key={c.id} to={`/shop?category=${c.id}`} className="category-card">
+          <img src={images[c.name]||images.Accessories} alt={c.name} loading="lazy"/>
+          <div>
+            <span className="eyebrow gold">{BRAND.nameAccent}</span>
+            <h3>{c.name}</h3>
+          </div>
+        </Link>
+      ))}
+    </div>
+  </section>;
+}
 function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
   const {add}=useCart();
   const {t}=useI18n();
+  const level=resolveStockPriority(p);
   const trackCart = () => {
     api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);
   };
   return <article className="product-card">
     <Link to={`/product/${p.slug}`} className="product-image">
       <img src={p.images?.[0]} alt={p.name} loading="lazy"/>
-      <span className="inventory-badge" style={{
-        background: 'rgba(0,0,0,0.8)', color: '#fff', fontSize: '11px', padding: '4px 8px', borderRadius: '4px'
-      }}>
-        {p.stockPriority===1?`🟢 ${t('product.inStock')}`:p.stockPriority===2?`🟡 ${t('product.limitedStock')}`:`🔴 ${t('product.outOfStock')}`}
-      </span>
+      <InventoryBadge p={p}/>
     </Link>
     <div>
       <p className="eyebrow">{p.category?.name||'KENS selection'}</p>
@@ -73,26 +232,27 @@ function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
       <p>{p.short_description}</p>
       <div className="product-row">
         <strong>{money(p.price)}</strong>
-        <button onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={!p.stock_quantity} aria-label={t('product.addToCart')}><Plus/> {t('product.addBtn')}</button>
+        <button onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={level===3} aria-label={t('product.addToCart')}><Plus/> {t('product.addBtn')}</button>
       </div>
     </div>
   </article>
 }
 function Home(){
   const [products,setProducts]=useState<Product[]>([]);
+  const [cats,setCats]=useState<any[]>([]);
   const [loading,setLoading]=useState(true);
   const [toast,setToast]=useState('');
   const {t}=useI18n();
   useEffect(()=>{
-    api('/api/products').then(setProducts).finally(()=>setLoading(false))
+    Promise.all([api('/api/products'),api('/api/categories')])
+      .then(([p,c])=>{setProducts(p);setCats(c)})
+      .finally(()=>setLoading(false))
   },[]);
   const featured=products.filter(p=>p.featured);
-  // Trending: dynamic 30-day score from API (purchase×5 + cart×3 + view×1)
   const trending=[...products]
     .filter(p=>(p.trendingScore||0)>0)
     .sort((a,b)=>b.trendingScore-a.trendingScore||(b.purchase_count||0)-(a.purchase_count||0))
     .slice(0,4);
-  // Best sellers: dynamic lifetime purchase_count
   const bestSellers=[...products]
     .filter(p=>(p.purchase_count||0)>0)
     .sort((a,b)=>(b.purchase_count||0)-(a.purchase_count||0)||(b.trendingScore||0)-(a.trendingScore||0))
@@ -100,16 +260,9 @@ function Home(){
   const arrivals=products.filter(p=>p.isNewArrival).slice(0,4);
   
   return <Layout>
-    <section className="hero">
-      <div className="hero-bg"/>
-      <motion.div initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
-        <p className="eyebrow gold">KEN'S SHOP</p>
-        <h1>{t('home.subtitle')}<br/><em>{t('home.subtitleEm')}</em></h1>
-        <p>{t('home.description')}</p>
-        <Link className="btn gold-btn" to="/shop">{t('home.exploreBtn')} <ArrowRight/></Link>
-      </motion.div>
-    </section>
+    <HeroSlider/>
     {loading?<Loading/>:<>
+      <CategoryStrip cats={cats}/>
       {featured.length>0&&<ProductSection title={t('home.featuredTitle')} subtitle={t('home.featuredSub')} products={featured} onAdded={()=>setToast(t('home.addedToBag'))}/>}
       {trending.length>0&&<ProductSection title={t('home.trendingTitle')} subtitle={t('home.trendingSub')} products={trending} onAdded={()=>setToast(t('home.addedToBag'))}/>}
       {bestSellers.length>0&&<ProductSection title={t('home.bestSellersTitle')} subtitle={t('home.bestSellersSub')} products={bestSellers} onAdded={()=>setToast(t('home.addedToBag'))}/>}
@@ -119,8 +272,9 @@ function Home(){
           <p className="eyebrow gold">{t('home.personalService')}</p>
           <h2>{t('home.questionsTitle')}</h2>
           <p>{t('home.questionsDesc')}</p>
+          <SocialLinks className="contact-social"/>
         </div>
-        <a href="https://wa.me/15551234567" className="btn gold-btn"><MessageCircle/> WhatsApp</a>
+        <a href={whatsappUrl()} className="btn gold-btn" target="_blank" rel="noreferrer"><MessageCircle/> WhatsApp</a>
       </section>
     </>}
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
@@ -133,16 +287,22 @@ function Shop(){
   const [cats,setCats]=useState<any[]>([]);
   const [loading,setLoading]=useState(true);
   const [q,setQ]=useState('');
-  const [cat,setCat]=useState(new URLSearchParams(location.search).get('category')||'all');
+  const [searchParams,setSearchParams]=useSearchParams();
+  const cat=searchParams.get('category')||'all';
   const [sort,setSort]=useState('ranking');
   const [toast,setToast]=useState('');
   const {t}=useI18n();
-  
+
   useEffect(()=>{
     Promise.all([api('/api/products'),api('/api/categories')])
       .then(([p,c])=>{setProducts(p);setCats(c)})
       .finally(()=>setLoading(false))
   },[]);
+
+  const selectCat=(id:string)=>{
+    if(id==='all')setSearchParams({});
+    else setSearchParams({category:id});
+  };
   
   let filtered=products.filter(p=>(cat==='all'||String(p.category_id)===cat)&&p.name.toLowerCase().includes(q.toLowerCase()));
   if(sort==='trending') filtered.sort((a,b)=>b.trendingScore-a.trendingScore);
@@ -150,7 +310,7 @@ function Shop(){
   else if(sort==='newest') filtered.sort((a,b)=>new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   else if(sort==='price-asc') filtered.sort((a,b)=>a.price-b.price);
   else if(sort==='price-desc') filtered.sort((a,b)=>b.price-a.price);
-  else if(sort==='availability') filtered.sort((a,b)=>a.stockPriority-b.stockPriority);
+  else if(sort==='availability') filtered.sort((a,b)=>resolveStockPriority(a)-resolveStockPriority(b));
   else if(sort==='az') filtered.sort((a,b)=>a.name.localeCompare(b.name));
 
   return <Layout>
@@ -175,8 +335,8 @@ function Shop(){
           </select>
         </div>
         <div>
-          <button className={cat==='all'?'active':''} onClick={()=>setCat('all')}>{t('shop.categoryAll')}</button>
-          {cats.map(c=><button key={c.id} className={cat===String(c.id)?'active':''} onClick={()=>setCat(String(c.id))}>{c.name}</button>)}
+          <button className={cat==='all'?'active':''} onClick={()=>selectCat('all')}>{t('shop.categoryAll')}</button>
+          {cats.map(c=><button key={c.id} className={cat===String(c.id)?'active':''} onClick={()=>selectCat(String(c.id))}>{c.name}</button>)}
         </div>
       </div>
       {loading?<Loading/>:filtered.length?<div className="product-grid">{filtered.map(p=><ProductCard key={p.id} p={p} onAdded={()=>setToast(t('home.addedToBag'))}/>)}</div>:<Empty text={t('shop.emptyTitle')} action={<button className="btn" onClick={()=>setQ('')}>{t('shop.emptyAction')}</button>}/>}
@@ -205,6 +365,7 @@ function ProductDetail(){
 
   if(loading)return <Layout><Loading/></Layout>;
   if(!p)return <Layout><Empty text={t('shop.emptyTitle')}/></Layout>;
+  const level=resolveStockPriority(p);
   
   return <Layout>
     <div className="product-detail">
@@ -213,12 +374,15 @@ function ProductDetail(){
         <p className="eyebrow gold">{p.category?.name||'KENS'}</p>
         <h1>{p.name}</h1>
         <p className="price">{money(p.price)}</p>
+        <p className="inventory-status" style={{margin:'0 0 1rem',fontSize:'13px'}}>
+          {level===1?`🟢 ${t('product.inStock')}`:level===2?`🟡 ${t('product.limitedStock')}`:`🔴 ${t('product.outOfStock')}`}
+        </p>
         <p className="desc">{p.description}</p>
         {(p.colors?.length>0||p.models?.length>0)&&<div className="options">
           {p.colors?.length>0&&<div><span>{t('product.color')}</span><div>{p.colors.map(c=><span key={c} className="opt">{c}</span>)}</div></div>}
           {p.models?.length>0&&<div><span>{t('product.model')}</span><div>{p.models.map(m=><span key={m} className="opt">{m}</span>)}</div></div>}
         </div>}
-        <button className="btn gold-btn" onClick={()=>{add(p);setToast(t('home.addedToBag'));api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);}} disabled={!p.stock_quantity}>{p.stock_quantity?t('product.addToCart'):t('product.outOfStock')}</button>
+        <button className="btn gold-btn" onClick={()=>{add(p);setToast(t('home.addedToBag'));api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);}} disabled={level===3}>{level===3?t('product.outOfStock'):t('product.addToCart')}</button>
         <div className="meta"><span><Truck/> {t('product.assurance')}</span><span><Package/> Signature packaging</span></div>
       </div>
     </div>
@@ -238,7 +402,7 @@ function Cart(){
       const lines=items.map((x:any)=>`• ${x.product.name}${x.color?` · ${x.color}`:''}${x.model?` · ${x.model}`:''} × ${x.quantity}`).join('\n');
       const text=t('cart.whatsappMessage', d.order_number, lines, money(total));
       clear();
-      window.open(`https://wa.me/15551234567?text=${encodeURIComponent(text)}`,'_blank')
+      window.open(whatsappUrl(text),'_blank')
     }catch(e:any){setError(e.message)}finally{setOrdering(false)}
   };
   return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${i}`}><img src={x.product.images[0]} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button onClick={()=>update(i,x.quantity-1)}><Minus/></button><span>{x.quantity}</span><button onClick={()=>update(i,x.quantity+1)}><Plus/></button></div></div><button className="remove" onClick={()=>remove(i)}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button className="btn gold-btn" onClick={order} disabled={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {t('cart.orderBtn')}</button>{error&&<p className="error">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={t('cart.emptyText')} action={<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>}/>}</section></Layout>
@@ -250,18 +414,18 @@ function Login(){
   useAdminNoIndex();const {user}=useAuth();const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false);const {t}=useI18n();
   if(user)return <Navigate to="/admin/dashboard" replace/>;
   const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setError(t('admin.invalidLogin'));setBusy(false)};
-  return <main className="login"><span className="brand inverse">Ken's <span>Shop</span></span><div className="login-card"><p className="eyebrow gold">{t('admin.loginPortal')}</p><h1>{t('admin.loginTitle')}</h1><p>{t('admin.loginSub')}</p><form onSubmit={submit}><label>{t('admin.email')}<input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" required/></label><label>{t('admin.password')}<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" minLength={6} required/></label>{error&&<p className="error">{error}</p>}<button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:t('admin.signInBtn')}</button></form></div></main>
+  return <main className="login"><BrandMark className="inverse"/><div className="login-card"><p className="eyebrow gold">{t('admin.loginPortal')}</p><h1>{t('admin.loginTitle')}</h1><p>{t('admin.loginSub')}</p><form onSubmit={submit}><label>{t('admin.email')}<input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" required/></label><label>{t('admin.password')}<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" minLength={6} required/></label>{error&&<p className="error">{error}</p>}<button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:t('admin.signInBtn')}</button></form></div></main>
 }
 function AdminShell({children}:{children:React.ReactNode}){
   useAdminNoIndex();const [open,setOpen]=useState(false);const nav=useNavigate();const {t, lang, setLang}=useI18n();
   const logout=async()=>{await supabase.auth.signOut();nav('/admin/login')};
-  return <div className="admin"><aside className={open?'open':''}><span className="brand inverse">Ken's <span>Shop</span></span><button className="close-admin" onClick={()=>setOpen(false)}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink></nav><button onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button onClick={()=>setOpen(true)}><Menu/></button><div style={{display:'flex', gap:'1rem', alignItems:'center'}}><button className="theme-toggle" onClick={()=>setLang(lang==='fr'?'en':'fr')} style={{fontSize: '11px', fontWeight:'bold', letterSpacing:'1px'}}>{lang.toUpperCase()}</button><span>{t('admin.shopManager')}</span><CircleUser/></div></header>{children}</div></div>
+  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button className="close-admin" onClick={()=>setOpen(false)}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink></nav><button onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button onClick={()=>setOpen(true)}><Menu/></button><div style={{display:'flex', gap:'1rem', alignItems:'center'}}><button className="theme-toggle" onClick={()=>setLang(lang==='fr'?'en':'fr')} style={{fontSize: '11px', fontWeight:'bold', letterSpacing:'1px'}}>{lang.toUpperCase()}</button><span>{t('admin.shopManager')}</span><CircleUser/></div></header>{children}</div></div>
 }
 function AdminDashboard(){
   const [data,setData]=useState<any>(null);
   const {session}=useAuth();
   const {t}=useI18n();
-  useEffect(()=>{api('/api/dashboard',{headers:{Authorization:`Bearer ${session?.access_token}`}}).then(setData)},[session]);
+  useEffect(()=>{if(session?.access_token)api('/api/dashboard',{headers:{Authorization:`Bearer ${session.access_token}`}}).then(setData)},[session]);
   if(!data)return <AdminShell><Loading/></AdminShell>;
   const cards=[
     [t('admin.stats.totalProducts'),data.totalProducts,Gem],
@@ -280,18 +444,34 @@ function AdminDashboard(){
     {icon:'🛒',label:t('admin.widgets.mostCart'),product:data.mostCart},
     {icon:'💰',label:t('admin.widgets.highestRevenue'),product:data.highestRevenue},
   ];
+  const runningLow=data.runningLow||[];
   return <AdminShell><section className="admin-content">
     <div className="admin-title"><div><p className="eyebrow gold">{t('admin.dashboardEyebrow')}</p><h1>{t('admin.dashboardTitle')}</h1></div><Link to="/admin/products" className="btn gold-btn"><Plus/> {t('admin.addProduct')}</Link></div>
     <div className="stat-grid simple-stats">{cards.map(([n,v,I]:any)=><article key={n}><I/><span>{n}</span><strong>{v}</strong></article>)}</div>
     <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.analyticsEyebrow')}</p><h2>{t('admin.analyticsTitle')}</h2></div></div>
     <div className="stat-grid simple-stats">{widgets.map(w=><article key={w.label}><span style={{fontSize:'1.5rem'}}>{w.icon}</span><span>{w.label}</span><strong style={{fontSize:'0.85rem',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{w.product?.name||'—'}</strong></article>)}</div>
-    <div className="admin-panels simple-panel"><article><div className="panel-head"><p className="eyebrow">{t('admin.latestOrders')}</p><Link to="/admin/orders">{t('admin.viewAllOrders')}</Link></div>{(data.recent||[]).map((o:any)=><Link className="mini-order" to="/admin/orders" key={o.id}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleDateString()}</span></div><strong>{money(o.total)}</strong><Status status={t(`admin.orderStatuses.${o.status}`)||o.status}/></Link>)}</article></div>
-  </section></AdminShell>}
+    <div className="admin-panels">
+      <article>
+        <div className="panel-head"><p className="eyebrow">{t('admin.runningLow')}</p><Link to="/admin/products">{t('admin.navProducts')}</Link></div>
+        {runningLow.length?runningLow.map((p:any)=>(
+          <Link className="mini-order" to="/admin/products" key={p.id}>
+            <div><b>{p.name}</b><span>{t('admin.qty')} {p.stock_quantity} · {t('admin.stockState.low')} ≤ {p.low_stock_threshold??5}</span></div>
+            <Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/>
+          </Link>
+        )):<p className="fine" style={{padding:'12px 0'}}>{t('admin.runningLowEmpty')}</p>}
+      </article>
+      <article>
+        <div className="panel-head"><p className="eyebrow">{t('admin.latestOrders')}</p><Link to="/admin/orders">{t('admin.viewAllOrders')}</Link></div>
+        {(data.recent||[]).map((o:any)=><Link className="mini-order" to="/admin/orders" key={o.id}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleDateString()}</span></div><strong>{money(o.total)}</strong><Status status={t(`admin.orderStatuses.${o.status}`)||o.status}/></Link>)}
+      </article>
+    </div>
+  </section></AdminShell>
+}
 const authHeaders=(token?:string)=>({'Content-Type':'application/json',Authorization:`Bearer ${token}`});
 function AdminProducts(){const [products,setProducts]=useState<Product[]>([]);const [cats,setCats]=useState<any[]>([]);const [q,setQ]=useState('');const [editing,setEditing]=useState<any>(null);const [error,setError]=useState('');const {session}=useAuth();const {t}=useI18n();const load=()=>Promise.all([api('/api/products?admin=true',{headers:authHeaders(session?.access_token)}),api('/api/categories')]).then(([p,c])=>{setProducts(p);setCats(c)});useEffect(()=>{load()},[]);const del=async(id:string|number)=>{if(!confirm(t('admin.confirmDelete')))return;await api('/api/products',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});load()};return <AdminShell><section className="admin-content"><div className="admin-title"><div><p className="eyebrow gold">{t('admin.productsEyebrow')}</p><h1>{t('admin.productsTitle')}</h1></div><button className="btn gold-btn" onClick={()=>setEditing({})}><Plus/> {t('admin.addProduct')}</button></div><label className="admin-search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchProduct')}/></label><div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th></th></tr></thead><tbody>{products.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())).map(p=><tr key={p.id}><td><div className="table-product"><img src={p.images[0]}/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button onClick={()=>setEditing(p)}><Pencil/></button><button onClick={()=>del(p.id)}><Trash2/></button></td></tr>)}</tbody></table></div>{editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>setEditing(null)} done={()=>{setEditing(null);load()}} error={error} setError={setError}/>}</section></AdminShell>}
 function Stock({n,threshold=5,priority}:{n:number;threshold?:number;priority?:number}){
   const {t}=useI18n();
-  const level=priority??(n===0?3:n<=threshold?2:1);
+  const level=resolveStockPriority({stock_quantity:n,low_stock_threshold:threshold,stockPriority:priority});
   return <span className={`stock ${level===3?'out':level===2?'low':''}`}><i/>{level===3?t('admin.stockState.out'):level===2?`${n} · ${t('admin.stockState.low')}`:`${n} ${t('admin.stockState.available')}`}</span>
 }
 function ProductModal({item,cats,token,close,done,error,setError}:any){
@@ -369,6 +549,105 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
 }
 const statuses=['Pending','Discussing on WhatsApp','Confirmed','Preparing','Out for Delivery','Delivered','Cancelled'];
 function Status({status}:{status:string}){return <span className={`status s-${status.toLowerCase().replaceAll(' ','-')}`}>{status}</span>}
+function AdminHero(){
+  const [slides,setSlides]=useState<any[]>([]);
+  const [editing,setEditing]=useState<any|null>(null);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const {session}=useAuth();
+  const {t}=useI18n();
+  const load=()=>api('/api/hero?admin=true',{headers:authHeaders(session?.access_token)}).then(setSlides);
+  useEffect(()=>{if(session?.access_token)load()},[session]);
+
+  const upload=async(files:FileList|null)=>{
+    if(!files?.length||!editing)return;
+    setBusy(true);setError('');
+    try{
+      const file=files[0];
+      const base64=await new Promise<string>((resolve)=>{const r=new FileReader();r.onload=()=>resolve((r.result as string).split(',')[1]);r.readAsDataURL(file)});
+      const d=await api('/api/upload',{method:'POST',headers:authHeaders(session?.access_token),body:JSON.stringify({fileName:`hero-${Date.now()}-${file.name}`,fileBase64:base64,contentType:file.type})});
+      setEditing((x:any)=>({...x,image_url:d.url}));
+    }catch(e:any){setError(e.message)}finally{setBusy(false)}
+  };
+
+  const save=async(e:FormEvent)=>{
+    e.preventDefault();
+    if(!editing?.image_url)return setError(t('admin.heroImageRequired'));
+    setBusy(true);setError('');
+    try{
+      await api('/api/hero',{
+        method:editing.id?'PUT':'POST',
+        headers:authHeaders(session?.access_token),
+        body:JSON.stringify({
+          ...editing,
+          display_order:Number(editing.display_order)||0,
+          enabled:!!editing.enabled,
+        }),
+      });
+      setEditing(null);
+      load();
+    }catch(err:any){setError(err.message)}finally{setBusy(false)}
+  };
+
+  const remove=async(id:string)=>{
+    if(!confirm(t('admin.heroConfirmDelete')))return;
+    await api('/api/hero',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});
+    load();
+  };
+
+  const move=async(slide:any,delta:number)=>{
+    await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({id:slide.id,display_order:Math.max(0,(Number(slide.display_order)||0)+delta)})});
+    load();
+  };
+
+  const toggle=async(slide:any)=>{
+    await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({id:slide.id,enabled:!slide.enabled})});
+    load();
+  };
+
+  return <AdminShell><section className="admin-content">
+    <div className="admin-title">
+      <div><p className="eyebrow gold">{t('admin.heroEyebrow')}</p><h1>{t('admin.heroTitle')}</h1></div>
+      <button className="btn gold-btn" onClick={()=>setEditing({title:'',subtitle:'',cta_label:t('home.exploreBtn'),cta_href:'/shop',display_order:(slides.length+1),enabled:true,image_url:''})}><Plus/> {t('admin.heroAdd')}</button>
+    </div>
+    <p className="fine" style={{marginTop:'-1rem',marginBottom:'1.5rem'}}>{t('admin.heroHelp')}</p>
+    <div className="hero-admin-list">
+      {slides.map(s=>(
+        <article key={s.id} className={`hero-admin-card ${s.enabled?'':'disabled'}`}>
+          <img src={s.image_url} alt={s.title||'Hero'}/>
+          <div>
+            <b>{s.title||t('admin.heroUntitled')}</b>
+            <span>{t('admin.heroOrder')}: {s.display_order} · {s.enabled?t('admin.heroEnabled'):t('admin.heroDisabled')}</span>
+            <small>{s.subtitle}</small>
+          </div>
+          <div className="hero-admin-actions">
+            <button type="button" onClick={()=>move(s,-1)} aria-label="Move up"><ChevronLeft/></button>
+            <button type="button" onClick={()=>move(s,1)} aria-label="Move down"><ChevronRight/></button>
+            <button type="button" onClick={()=>toggle(s)}>{s.enabled?t('admin.heroDisable'):t('admin.heroEnable')}</button>
+            <button type="button" onClick={()=>setEditing(s)}><Pencil/></button>
+            <button type="button" onClick={()=>remove(s.id)}><Trash2/></button>
+          </div>
+        </article>
+      ))}
+      {!slides.length&&<Empty text={t('admin.heroEmpty')}/>}
+    </div>
+    {editing&&<div className="modal-bg"><form className="modal" onSubmit={save}>
+      <div className="modal-head"><div><p className="eyebrow gold">{editing.id?t('admin.heroEdit'):t('admin.heroNew')}</p><h2>{t('admin.heroTitle')}</h2></div><button type="button" onClick={()=>setEditing(null)}><X/></button></div>
+      <div className="form-grid">
+        <label className="full">{t('admin.heroTitleField')}<input value={editing.title||''} onChange={e=>setEditing({...editing,title:e.target.value})}/></label>
+        <label className="full">{t('admin.heroSubtitle')}<textarea value={editing.subtitle||''} onChange={e=>setEditing({...editing,subtitle:e.target.value})}/></label>
+        <label>{t('admin.heroCtaLabel')}<input value={editing.cta_label||''} onChange={e=>setEditing({...editing,cta_label:e.target.value})}/></label>
+        <label>{t('admin.heroCtaHref')}<input value={editing.cta_href||'/shop'} onChange={e=>setEditing({...editing,cta_href:e.target.value})}/></label>
+        <label>{t('admin.heroOrder')}<input type="number" min="0" value={editing.display_order??0} onChange={e=>setEditing({...editing,display_order:e.target.value})}/></label>
+        <label className="checks"><input type="checkbox" checked={!!editing.enabled} onChange={e=>setEditing({...editing,enabled:e.target.checked})}/> {t('admin.heroEnabled')}</label>
+        <label className="full upload">{t('admin.heroImage')}<input type="file" accept="image/*" onChange={e=>upload(e.target.files)}/><span><Plus/> {busy?t('admin.modal.uploading'):t('admin.heroChooseImage')}</span></label>
+        {editing.image_url?<div className="image-preview full"><div><img src={editing.image_url}/></div></div>:null}
+      </div>
+      {error&&<p className="error">{error}</p>}
+      <div className="modal-actions"><button type="button" onClick={()=>setEditing(null)}>Cancel</button><button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
+    </form></div>}
+  </section></AdminShell>;
+}
 function AdminOrders(){
   const [orders,setOrders]=useState<any[]>([]);const [selected,setSelected]=useState<any>(null);const [q,setQ]=useState('');const [filter,setFilter]=useState('All');const {session}=useAuth();const {t}=useI18n();
   const load=()=>api('/api/orders',{headers:authHeaders(session?.access_token)}).then(setOrders);useEffect(()=>{load()},[]);
@@ -377,9 +656,12 @@ function AdminOrders(){
 }
 function OrderDrawer({order,token,close,done}:any){
   const [form,setForm]=useState({...order});const [busy,setBusy]=useState(false);const {t}=useI18n();
-  const set=(k:string,v:any)=>setForm((x:any)=>({...x,[k]:v}));const save=async(status?:string)=>{setBusy(true);await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({...form,status:status||form.status})});setBusy(false);done()};const wa=form.whatsapp_number?.replace(/\D/g,'')||'15551234567';
-  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2>{t('admin.orderDetails')}</h2></div><button onClick={close}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><img src={x.product?.images?.[0]}/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={`https://wa.me/${wa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+form.order_number)}`} target="_blank"><MessageCircle/> WhatsApp</a><button onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button className="danger" onClick={()=>save('Cancelled')}>{t('admin.cancelOrder')}</button><button className="btn dark-btn" onClick={()=>save('Delivered')}>{t('admin.markDelivered')}</button><button className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
+  const set=(k:string,v:any)=>setForm((x:any)=>({...x,[k]:v}));
+  const save=async(status?:string)=>{setBusy(true);await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({...form,status:status||form.status})});setBusy(false);done()};
+  const customerWa=(form.whatsapp_number||SOCIAL.whatsappNumber).replace(/\D/g,'');
+  const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+form.order_number)}`;
+  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2>{t('admin.orderDetails')}</h2></div><button onClick={close}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><img src={x.product?.images?.[0]}/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={waHref} target="_blank" rel="noreferrer"><MessageCircle/> WhatsApp</a><button onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button className="danger" onClick={()=>save('Cancelled')}>{t('admin.cancelOrder')}</button><button className="btn dark-btn" onClick={()=>save('Delivered')}>{t('admin.markDelivered')}</button><button className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
 }
 export default function App(){
-  return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
+  return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
 }

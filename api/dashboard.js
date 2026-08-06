@@ -3,6 +3,8 @@ import {
   buildEventCounts,
   decorateProduct,
   getTrendingCutoffISO,
+  inventorySummary,
+  productsRunningLow,
   topTrending,
   topBestSellers,
 } from './ranking.js';
@@ -19,7 +21,7 @@ export default async function handler(req, res) {
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     const [pResult, oResult, itemsResult, eventsResult] = await Promise.all([
-      supabase.from('products').select('id, name, stock_quantity, active, low_stock_threshold, view_count, cart_count, purchase_count, price, created_at, featured, display_priority'),
+      supabase.from('products').select('id, name, stock_quantity, active, low_stock_threshold, view_count, cart_count, purchase_count, price, created_at, featured, display_priority, slug'),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
       supabase.from('order_items').select('*'),
       supabase.from('product_events').select('product_id, event_type').gte('created_at', getTrendingCutoffISO()),
@@ -42,19 +44,25 @@ export default async function handler(req, res) {
       return { ...decorated, revenue };
     });
 
+    const { available, lowStock, outOfStock } = inventorySummary(productsWithStats);
+
     const trendingProduct = topTrending(productsWithStats, 1)[0] || null;
     const bestSeller = topBestSellers(productsWithStats, 1)[0] || null;
-    const mostViewed = [...productsWithStats].sort((a, b) => b.view_count - a.view_count)[0] || null;
-    const mostCart = [...productsWithStats].sort((a, b) => b.cart_count - a.cart_count)[0] || null;
-    const highestRevenue = [...productsWithStats].sort((a, b) => b.revenue - a.revenue)[0] || null;
+    const mostViewed =
+      [...productsWithStats]
+        .filter((x) => (x.view_count || 0) > 0)
+        .sort((a, b) => b.view_count - a.view_count)[0] || null;
+    const mostCart =
+      [...productsWithStats]
+        .filter((x) => (x.cart_count || 0) > 0)
+        .sort((a, b) => b.cart_count - a.cart_count)[0] || null;
+    const highestRevenue =
+      [...productsWithStats]
+        .filter((x) => (x.revenue || 0) > 0)
+        .sort((a, b) => b.revenue - a.revenue)[0] || null;
 
     const today = new Date().toISOString().slice(0, 10);
     const delivered = o.filter((x) => x.status === 'Delivered');
-
-    // Inventory priority: 1 in-stock, 2 low-stock, 3 out-of-stock
-    const lowStock = productsWithStats.filter((x) => x.stockPriority === 2).length;
-    const outOfStock = productsWithStats.filter((x) => x.stockPriority === 3).length;
-    const available = productsWithStats.filter((x) => x.active && x.stockPriority !== 3).length;
 
     return res.status(200).json({
       totalProducts: p.length,
@@ -71,6 +79,7 @@ export default async function handler(req, res) {
       mostViewed,
       mostCart,
       highestRevenue,
+      runningLow: productsRunningLow(productsWithStats, 8),
     });
   } catch (e) {
     return res.status(500).json({ error: e.message });

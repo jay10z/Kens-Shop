@@ -4,15 +4,16 @@
  *   trendingScore  = purchase×5 + cart×3 + view×1  (from product_events, last 30 days)
  *   isNewArrival   = created_at within last 30 days
  *   isBestSeller   = purchase_count > 0
- *   stockPriority  = 1 in-stock | 2 low-stock | 3 out-of-stock
+ *   stockPriority  = 1 healthy | 2 low-stock | 3 out-of-stock (via low_stock_threshold)
  *
  * Master sort order:
+ *   0. Out of stock always last
  *   1. display_priority (lower = higher; null last)
  *   2. featured
  *   3. trendingScore (desc)
  *   4. purchase_count / best sellers (desc)
  *   5. isNewArrival
- *   6. stockPriority (in-stock first)
+ *   6. low stock deprioritized vs healthy
  *   7. created_at (newest first)
  */
 
@@ -50,12 +51,47 @@ export function computeTrendingScore(counts = { view: 0, cart: 0, purchase: 0 })
   return (counts.purchase || 0) * 5 + (counts.cart || 0) * 3 + (counts.view || 0) * 1;
 }
 
+/** Inventory status levels — use everywhere instead of ad-hoc thresholds */
+export const STOCK_HEALTHY = 1;
+export const STOCK_LOW = 2;
+export const STOCK_OUT = 3;
+
 export function computeStockPriority(product) {
   const qty = product.stock_quantity ?? 0;
   const threshold = product.low_stock_threshold ?? 5;
-  if (qty === 0) return 3;
-  if (qty <= threshold) return 2;
-  return 1;
+  if (qty === 0) return STOCK_OUT;
+  if (qty <= threshold) return STOCK_LOW;
+  return STOCK_HEALTHY;
+}
+
+export function inventorySummary(products = []) {
+  let available = 0;
+  let lowStock = 0;
+  let outOfStock = 0;
+  for (const p of products) {
+    const priority = p.stockPriority ?? computeStockPriority(p);
+    if (priority === STOCK_OUT) {
+      outOfStock += 1;
+    } else if (priority === STOCK_LOW) {
+      lowStock += 1;
+      if (p.active !== false) available += 1;
+    } else if (p.active !== false) {
+      available += 1;
+    }
+  }
+  return { available, lowStock, outOfStock };
+}
+
+/** Low-stock products ordered by scarcest first */
+export function productsRunningLow(products = [], limit = 8) {
+  return [...products]
+    .filter((p) => (p.stockPriority ?? computeStockPriority(p)) === STOCK_LOW)
+    .sort(
+      (a, b) =>
+        (a.stock_quantity ?? 0) - (b.stock_quantity ?? 0) ||
+        String(a.name || '').localeCompare(String(b.name || ''))
+    )
+    .slice(0, limit);
 }
 
 export function decorateProduct(
@@ -80,6 +116,14 @@ export function decorateProduct(
 }
 
 export function compareProducts(a, b) {
+  const aPriority = a.stockPriority ?? computeStockPriority(a);
+  const bPriority = b.stockPriority ?? computeStockPriority(b);
+
+  // Out of stock always last (hide via `hidden` to remove from catalog)
+  const aOut = aPriority === STOCK_OUT;
+  const bOut = bPriority === STOCK_OUT;
+  if (aOut !== bOut) return aOut ? 1 : -1;
+
   // 1. Display priority (lower number wins; null/undefined last)
   if (a.display_priority !== b.display_priority) {
     if (a.display_priority === null || a.display_priority === undefined) return 1;
@@ -96,8 +140,8 @@ export function compareProducts(a, b) {
   }
   // 5. New arrivals
   if (a.isNewArrival !== b.isNewArrival) return a.isNewArrival ? -1 : 1;
-  // 6. Stock priority (in-stock first)
-  if (a.stockPriority !== b.stockPriority) return a.stockPriority - b.stockPriority;
+  // 6. Low stock deprioritized vs healthy
+  if (aPriority !== bPriority) return aPriority - bPriority;
   // 7. Newest first
   return new Date(b.created_at) - new Date(a.created_at);
 }
