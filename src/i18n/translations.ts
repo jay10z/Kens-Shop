@@ -95,6 +95,7 @@ export const translations = {
       password: 'Password',
       signInBtn: 'Sign in',
       invalidLogin: 'Invalid email or password.',
+      navDashboard: 'Dashboard',
       navProducts: 'Products',
       navOrders: 'Orders',
       signOut: 'Sign out',
@@ -109,8 +110,10 @@ export const translations = {
         available: 'In Stock',
         lowStock: 'Low Stock',
         outOfStock: 'Out of Stock',
+        ordersToday: 'Orders Today',
         pending: 'Pending Orders',
-        delivered: 'Delivered'
+        delivered: 'Delivered',
+        revenue: 'Revenue'
       },
       analyticsTitle: 'Sales Analytics',
       analyticsEyebrow: 'INTELLIGENCE',
@@ -310,6 +313,7 @@ export const translations = {
       password: 'Mot de passe',
       signInBtn: 'Se connecter',
       invalidLogin: 'E-mail ou mot de passe invalide.',
+      navDashboard: 'Tableau de bord',
       navProducts: 'Produits',
       navOrders: 'Commandes',
       signOut: 'Se déconnecter',
@@ -324,8 +328,10 @@ export const translations = {
         available: 'En Stock',
         lowStock: 'Stock Faible',
         outOfStock: 'Rupture',
+        ordersToday: "Commandes aujourd'hui",
         pending: 'En Attente',
-        delivered: 'Livrées'
+        delivered: 'Livrées',
+        revenue: 'Revenu'
       },
       analyticsTitle: 'Analyse des Ventes',
       analyticsEyebrow: 'INTELLIGENCE',
