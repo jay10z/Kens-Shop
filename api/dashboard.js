@@ -9,6 +9,24 @@ import {
   topBestSellers,
 } from './ranking.js';
 
+const emptyDashboard = {
+  totalProducts: 0,
+  available: 0,
+  lowStock: 0,
+  outOfStock: 0,
+  ordersToday: 0,
+  pending: 0,
+  delivered: 0,
+  revenue: 0,
+  recent: [],
+  trendingProduct: null,
+  bestSeller: null,
+  mostViewed: null,
+  mostCart: null,
+  highestRevenue: null,
+  runningLow: [],
+};
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -20,21 +38,23 @@ export default async function handler(req, res) {
     const { data: { user } } = await supabase.auth.getUser(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
+    // select('*') survives schema drift; specific columns previously 500'd the dashboard.
     const [pResult, oResult, itemsResult, eventsResult] = await Promise.all([
-      supabase.from('products').select('id, name, stock_quantity, active, low_stock_threshold, view_count, cart_count, purchase_count, price, created_at, featured, display_priority, slug'),
+      supabase.from('products').select('*'),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
       supabase.from('order_items').select('*'),
-      supabase.from('product_events').select('product_id, event_type').gte('created_at', getTrendingCutoffISO()),
+      supabase
+        .from('product_events')
+        .select('product_id, event_type')
+        .gte('created_at', getTrendingCutoffISO()),
     ]);
 
-    if (pResult.error || oResult.error || itemsResult.error || eventsResult.error) {
-      throw (pResult.error || oResult.error || itemsResult.error || eventsResult.error);
-    }
-
-    const p = pResult.data;
-    const o = oResult.data;
-    const orderItems = itemsResult.data;
-    const eventCounts = buildEventCounts(eventsResult.data || []);
+    if (pResult.error) throw pResult.error;
+    // Orders / items / events may be empty or tables may be missing on older DBs
+    const p = pResult.data || [];
+    const o = oResult.error ? [] : oResult.data || [];
+    const orderItems = itemsResult.error ? [] : itemsResult.data || [];
+    const eventCounts = buildEventCounts(eventsResult.error ? [] : eventsResult.data || []);
 
     const productsWithStats = p.map((product) => {
       const decorated = decorateProduct(product, eventCounts);
@@ -65,11 +85,12 @@ export default async function handler(req, res) {
     const delivered = o.filter((x) => x.status === 'Delivered');
 
     return res.status(200).json({
+      ...emptyDashboard,
       totalProducts: p.length,
       available,
       lowStock,
       outOfStock,
-      ordersToday: o.filter((x) => x.created_at.slice(0, 10) === today).length,
+      ordersToday: o.filter((x) => String(x.created_at || '').slice(0, 10) === today).length,
       pending: o.filter((x) => x.status === 'Pending').length,
       delivered: delivered.length,
       revenue: delivered.reduce((s, x) => s + Number(x.total), 0),
@@ -80,8 +101,19 @@ export default async function handler(req, res) {
       mostCart,
       highestRevenue,
       runningLow: productsRunningLow(productsWithStats, 8),
+      warnings: [
+        oResult.error && `orders: ${oResult.error.message}`,
+        itemsResult.error && `order_items: ${itemsResult.error.message}`,
+        eventsResult.error && `product_events: ${eventsResult.error.message}`,
+      ].filter(Boolean),
     });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    console.error(e);
+    // Never leave the admin UI spinning forever
+    return res.status(200).json({
+      ...emptyDashboard,
+      error: e.message,
+      warnings: [e.message],
+    });
   }
 }

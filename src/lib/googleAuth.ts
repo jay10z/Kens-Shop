@@ -17,12 +17,13 @@ export function signInWithGoogle() {
     if (event.data?.type === 'google-auth-denied') return window.removeEventListener('message', handler);
     if (event.data?.type !== 'google-auth-success') return;
     window.removeEventListener('message', handler);
+    if (!supabase) return;
     if (event.data.access_token && event.data.refresh_token) await supabase.auth.setSession({ access_token: event.data.access_token, refresh_token: event.data.refresh_token });
     else if (event.data.id_token) await supabase.auth.signInWithIdToken({ provider: 'google', token: event.data.id_token });
   };
   window.addEventListener('message', handler);
 }
 export async function handleGoogleRedirect() {
-  const params = new URLSearchParams(window.location.search); const token = params.get('google_id_token'); if (!token) return;
+  const params = new URLSearchParams(window.location.search); const token = params.get('google_id_token'); if (!token || !supabase) return;
   window.history.replaceState({}, '', window.location.pathname); await supabase.auth.signInWithIdToken({ provider: 'google', token }); try { window.close(); } catch { /* noop */ }
 }

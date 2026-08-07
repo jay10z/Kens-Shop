@@ -131,6 +131,11 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: e.message });
+    const missingTable = /hero_slides/i.test(e.message || '') && /schema cache|does not exist/i.test(e.message || '');
+    return res.status(500).json({
+      error: missingTable
+        ? 'hero_slides table is missing. Run phase4_hero_slides_migration.sql in Supabase.'
+        : e.message,
+    });
   }
 }

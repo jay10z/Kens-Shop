@@ -19,6 +19,42 @@ const cors = (res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
+function isMissingHiddenColumn(error) {
+  return /column products\.hidden does not exist/i.test(error?.message || '');
+}
+
+/**
+ * Query products, optionally filtering hidden=false.
+ * If the DB has not been migrated yet (no `hidden` column), retry without the filter
+ * so the storefront never 500s on a schema drift.
+ */
+async function queryProducts(applyFilters, { single = false } = {}) {
+  const exec = async (filterHidden) => {
+    let q = supabase.from('products').select('*');
+    q = applyFilters(q, filterHidden);
+    return single ? await q.single() : await q;
+  };
+
+  let result = await exec(true);
+  if (result.error && isMissingHiddenColumn(result.error)) {
+    result = await exec(false);
+  }
+  return result;
+}
+
+function stripUnknownProductFields(payload) {
+  // Soft-compat: drop ranking/meta fields that are not DB columns.
+  const {
+    category,
+    trendingScore,
+    isNewArrival,
+    stockPriority,
+    isBestSeller,
+    ...rest
+  } = payload || {};
+  return rest;
+}
+
 export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -39,33 +75,36 @@ export default async function handler(req, res) {
         .gte('created_at', thirtyDaysAgoStr);
 
       const eventCounts = buildEventCounts(events || []);
+      const filterHiddenForPublic = req.query.admin !== 'true' || !isAdmin;
 
       if (req.query.slug) {
-        let q = supabase.from('products').select('*').eq('slug', req.query.slug);
-        if (!isAdmin) q = q.eq('hidden', false);
-        const { data: product, error } = await q.single();
+        const { data: product, error } = await queryProducts(
+          (q, filterHidden) => {
+            q = q.eq('slug', req.query.slug);
+            if (filterHidden && filterHiddenForPublic) q = q.eq('hidden', false);
+            return q;
+          },
+          { single: true }
+        );
         if (error) throw error;
 
         const decorated = decorateProduct(product, eventCounts, categories);
 
-        const { data: relatedRaw } = await supabase
-          .from('products')
-          .select('*')
-          .eq('category_id', product.category_id)
-          .eq('hidden', false)
-          .neq('id', product.id);
+        const { data: relatedRaw } = await queryProducts((q, filterHidden) => {
+          q = q.eq('category_id', product.category_id).neq('id', product.id);
+          if (filterHidden) q = q.eq('hidden', false);
+          return q;
+        });
 
         const related = rankProducts(relatedRaw || [], eventCounts, categories).slice(0, 4);
 
         return res.status(200).json({ product: decorated, related });
       }
 
-      let q = supabase.from('products').select('*');
-      if (req.query.admin !== 'true' || !isAdmin) {
-        q = q.eq('hidden', false);
-      }
-
-      const { data: products, error } = await q;
+      const { data: products, error } = await queryProducts((q, filterHidden) => {
+        if (filterHidden && filterHiddenForPublic) q = q.eq('hidden', false);
+        return q;
+      });
       if (error) throw error;
 
       return res.status(200).json(rankProducts(products || [], eventCounts, categories));
@@ -77,22 +116,33 @@ export default async function handler(req, res) {
       const { name } = req.body;
       if (!name) return res.status(400).json({ error: 'Name is required' });
 
-      const payload = {
-        ...req.body,
+      let payload = {
+        ...stripUnknownProductFields(req.body),
         slug: `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${Date.now().toString().slice(-5)}`,
       };
 
-      const { data, error } = await supabase.from('products').insert(payload).select().single();
+      let { data, error } = await supabase.from('products').insert(payload).select().single();
+      if (error && isMissingHiddenColumn(error) && 'hidden' in payload) {
+        const { hidden, ...rest } = payload;
+        payload = rest;
+        ({ data, error } = await supabase.from('products').insert(payload).select().single());
+      }
       if (error) throw error;
       return res.status(201).json(data);
     }
 
     if (req.method === 'PUT') {
-      const { id, category, trendingScore, isNewArrival, stockPriority, isBestSeller, ...payload } = req.body;
+      const { id, ...raw } = req.body;
+      let payload = stripUnknownProductFields(raw);
 
       if (payload.display_priority === '') payload.display_priority = null;
 
-      const { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
+      let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
+      if (error && isMissingHiddenColumn(error) && 'hidden' in payload) {
+        const { hidden, ...rest } = payload;
+        payload = rest;
+        ({ data, error } = await supabase.from('products').update(payload).eq('id', id).select().single());
+      }
       if (error) throw error;
       return res.status(200).json(data);
     }

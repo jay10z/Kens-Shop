@@ -1,37 +1,54 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, X } from 'lucide-react';
 import { BRAND, SOCIAL, whatsappUrl, isExternalHref, categoryImageUrl, DEFAULT_HERO_ASSETS } from './lib/brand';
-
-// ── Theme ──────────────────────────────────────────────
-function useTheme() {
-  const [theme, setTheme] = useState<'light'|'dark'>(() => {
-    const saved = localStorage.getItem('ks-theme');
-    if (saved === 'light' || saved === 'dark') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  });
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('ks-theme', theme);
-  }, [theme]);
-  const toggle = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
-  return { theme, toggle };
-}
-// Global theme context
-let _themeToggle: (() => void) | null = null;
-let _theme: 'light'|'dark' = 'dark';
-function ThemeProvider({children}:{children:React.ReactNode}){
-  const {theme,toggle}=useTheme();
-  _themeToggle=toggle; _theme=theme;
-  return <>{children}</>;
-}
 import { I18nProvider, useI18n } from './i18n/Context';
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
 import supabase from './lib/supabase';
+
+// ── Theme (single source of truth) ─────────────────────
+type ThemeMode = 'light' | 'dark';
+const ThemeContext = createContext<{ theme: ThemeMode; toggle: () => void }>({
+  theme: 'light',
+  toggle: () => {},
+});
+function readStoredTheme(): ThemeMode {
+  try {
+    const saved = localStorage.getItem('ks-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch { /* private mode */ }
+  if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
+function applyTheme(theme: ThemeMode) {
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('ks-theme', theme); } catch { /* private mode */ }
+}
+function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const initial = readStoredTheme();
+    if (typeof document !== 'undefined') applyTheme(initial);
+    return initial;
+  });
+  useEffect(() => { applyTheme(theme); }, [theme]);
+  const toggle = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'));
+  const value = useMemo(() => ({ theme, toggle }), [theme]);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+function useThemeMode() {
+  return useContext(ThemeContext);
+}
 const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
-async function api(path:string, options?:RequestInit){const r=await fetch(path,options);const d=await r.json();if(!r.ok)throw new Error(d.error||'Something went wrong');return d}
+async function api(path:string, options?:RequestInit){
+  const r=await fetch(path,options);
+  const text=await r.text();
+  let d:any=null;
+  try{d=text?JSON.parse(text):null}catch{throw new Error(r.ok?'Invalid server response':'Something went wrong')}
+  if(!r.ok)throw new Error(d?.error||'Something went wrong');
+  return d;
+}
 /** Same inventory levels as api/ranking.js — Healthy=1, Low=2, Out=3 */
 function resolveStockPriority(p:{stock_quantity?:number;low_stock_threshold?:number;stockPriority?:number}){
   if(p.stockPriority===1||p.stockPriority===2||p.stockPriority===3)return p.stockPriority;
@@ -45,10 +62,23 @@ function InventoryBadge({p}:{p:Product}){
   const {t}=useI18n();
   const level=resolveStockPriority(p);
   const label=level===1?t('product.inStock'):level===2?t('product.limitedStock'):t('product.outOfStock');
-  const dot=level===1?'🟢':level===2?'🟡':'🔴';
-  return <span className="inventory-badge" style={{background:'rgba(0,0,0,0.8)',color:'#fff',fontSize:'11px',padding:'4px 8px',borderRadius:'4px'}}>{dot} {label}</span>;
+  const tone=level===1?'ok':level===2?'low':'out';
+  return <span className={`inventory-badge tone-${tone}`}>{label}</span>;
 }
-function Toast({text,onClose}:{text:string;onClose:()=>void}){useEffect(()=>{const t=setTimeout(onClose,2600);return()=>clearTimeout(t)},[onClose]);return <motion.div initial={{y:20,opacity:0}} animate={{y:0,opacity:1}} exit={{y:20,opacity:0}} className="toast"><Check size={16}/>{text}</motion.div>}
+function Toast({text,onClose,tone='ok'}:{text:string;onClose:()=>void;tone?:'ok'|'err'|'info'}){
+  useEffect(()=>{const t=setTimeout(onClose,tone==='info'?3200:2600);return()=>clearTimeout(t)},[onClose,tone]);
+  return <motion.div initial={{y:20,opacity:0}} animate={{y:0,opacity:1}} exit={{y:20,opacity:0}} className={`toast toast-${tone}`} role="status" aria-live="polite">
+    {tone==='err'?<X size={16}/>:tone==='info'?<Loader2 size={16} className="spin"/>:<Check size={16}/>}{text}
+  </motion.div>;
+}
+function ProductImage({src,alt,className=''}:{src?:string;alt:string;className?:string}){
+  const [failed,setFailed]=useState(!src);
+  const {t}=useI18n();
+  if(!src||failed){
+    return <div className={`img-ph ${className}`} role="img" aria-label={alt||t('common.imageUnavailable')}><ImageIcon size={28}/></div>;
+  }
+  return <img src={src} alt={alt} className={className} loading="lazy" onError={()=>setFailed(true)}/>;
+}
 function BrandMark({className='',to='/'}:{className?:string;to?:string}){
   const slogan=(BRAND.slogan||'').trim();
   return <Link to={to} className={`brand ${className}${slogan?' has-slogan':''}`} aria-label={BRAND.fullName}>
@@ -83,7 +113,11 @@ function Header(){
   const [open,setOpen]=useState(false);
   const [cats,setCats]=useState<any[]>([]);
   const {t, lang, setLang}=useI18n();
+  const {theme, toggle}=useThemeMode();
   useEffect(()=>{api('/api/categories').then(setCats).catch(()=>{})},[]);
+  // Icon shows current mode: Sun = light (click → dark), Moon = dark (click → light)
+  const ThemeIcon = theme === 'light' ? Sun : Moon;
+  const themeLabel = theme === 'light' ? t('header.themeDark') : t('header.themeLight');
   return <header className="header">
     <BrandMark/>
     <nav className={open?'nav open':'nav'}>
@@ -93,10 +127,10 @@ function Header(){
     </nav>
     <div className="head-actions">
       <SocialLinks className="header-social"/>
-      <button className="theme-toggle" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label="Lang" style={{fontSize: '11px', fontWeight:'bold', letterSpacing:'1px'}}>{lang.toUpperCase()}</button>
-      <button className="theme-toggle" onClick={()=>_themeToggle?.()} aria-label="Theme" title={_theme==='dark'?t('header.themeLight'):t('header.themeDark')}>{_theme==='dark'?<Sun/>:<Moon/>}</button>
-      <Link to="/cart" className="bag" aria-label={t('header.cart')}><ShoppingBag/><b>{count}</b></Link>
-      <button className="menu" onClick={()=>setOpen(!open)} aria-label={t('header.menu')}>{open?<X/>:<Menu/>}</button>
+      <button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button>
+      <button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button>
+      <Link to="/cart" className="head-icon bag" aria-label={t('header.cart')}><ShoppingBag/><b aria-hidden="true">{count}</b></Link>
+      <button type="button" className="head-icon menu" onClick={()=>setOpen(!open)} aria-label={t('header.menu')} aria-expanded={open}>{open?<X/>:<Menu/>}</button>
     </div>
   </header>
 }
@@ -146,15 +180,25 @@ function HeroSlider(){
     let cancelled=false;
     api('/api/hero').then((data)=>{
       if(cancelled)return;
-      if(Array.isArray(data)){
-        if(data.length){setSlides(data);setIndex(0);setMode('ready');}
-        else{setSlides([]);setMode('empty');}
+      if(Array.isArray(data) && data.length){
+        setSlides(data);
+        setIndex(0);
+        setMode('ready');
+        return;
       }
+      // Empty or unexpected payload — keep homepage alive with branded empty state
+      setSlides([]);
+      setMode('empty');
     }).catch(()=>{
       if(cancelled)return;
-      setSlides(buildDefaultHeroSlides(t));
-      setIndex(0);
-      setMode('fallback');
+      try{
+        setSlides(buildDefaultHeroSlides(t));
+        setIndex(0);
+        setMode('fallback');
+      }catch{
+        setSlides([]);
+        setMode('empty');
+      }
     });
     return()=>{cancelled=true};
   },[]);
@@ -267,16 +311,16 @@ function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
   };
   return <article className="product-card">
     <Link to={`/product/${p.slug}`} className="product-image">
-      <img src={p.images?.[0]} alt={p.name} loading="lazy"/>
+      <ProductImage src={p.images?.[0]} alt={p.name}/>
       <InventoryBadge p={p}/>
     </Link>
     <div>
-      <p className="eyebrow">{p.category?.name||'KENS selection'}</p>
+      <p className="eyebrow">{p.category?.name||BRAND.fullName}</p>
       <Link to={`/product/${p.slug}`}><h3>{p.name}</h3></Link>
       <p>{p.short_description}</p>
       <div className="product-row">
         <strong>{money(p.price)}</strong>
-        <button onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={level===3} aria-label={t('product.addToCart')}><Plus/> {t('product.addBtn')}</button>
+        <button type="button" onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={level===3} aria-label={t('product.addToCart')}><Plus/> {t('product.addBtn')}</button>
       </div>
     </div>
   </article>
@@ -285,27 +329,36 @@ function Home(){
   const [products,setProducts]=useState<Product[]>([]);
   const [cats,setCats]=useState<any[]>([]);
   const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
   const [toast,setToast]=useState('');
   const {t}=useI18n();
-  useEffect(()=>{
+  const load=()=>{
+    setLoading(true);setError('');
     Promise.all([api('/api/products'),api('/api/categories')])
       .then(([p,c])=>{setProducts(p);setCats(c)})
-      .finally(()=>setLoading(false))
-  },[]);
-  const featured=products.filter(p=>p.featured);
-  const trending=[...products]
+      .catch(()=>setError(t('home.loadError')))
+      .finally(()=>setLoading(false));
+  };
+  useEffect(()=>{load()},[]);
+  const inStock=(p:Product)=>(p.stock_quantity??0)>0;
+  const featuredRaw=products.filter(p=>p.featured);
+  const featured=featuredRaw.length?featuredRaw:products.filter(inStock).slice(0,4);
+  const trendingRaw=[...products]
     .filter(p=>(p.trendingScore||0)>0)
     .sort((a,b)=>b.trendingScore-a.trendingScore||(b.purchase_count||0)-(a.purchase_count||0))
     .slice(0,4);
-  const bestSellers=[...products]
+  const trending=trendingRaw.length?trendingRaw:[...products].filter(inStock).sort((a,b)=>Number(b.price)-Number(a.price)).slice(0,4);
+  const bestRaw=[...products]
     .filter(p=>(p.purchase_count||0)>0)
     .sort((a,b)=>(b.purchase_count||0)-(a.purchase_count||0)||(b.trendingScore||0)-(a.trendingScore||0))
     .slice(0,4);
-  const arrivals=products.filter(p=>p.isNewArrival).slice(0,4);
+  const bestSellers=bestRaw.length?bestRaw:[...products].filter(inStock).slice(0,4);
+  const arrivalsRaw=products.filter(p=>p.isNewArrival).slice(0,4);
+  const arrivals=arrivalsRaw.length?arrivalsRaw:[...products].slice(0,4);
   
   return <Layout>
     <HeroSlider/>
-    {loading?<Loading/>:<>
+    {loading?<Loading/>:error?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:<>
       <CategoryStrip cats={cats}/>
       {featured.length>0&&<ProductSection title={t('home.featuredTitle')} subtitle={t('home.featuredSub')} products={featured} onAdded={()=>setToast(t('home.addedToBag'))}/>}
       {trending.length>0&&<ProductSection title={t('home.trendingTitle')} subtitle={t('home.trendingSub')} products={trending} onAdded={()=>setToast(t('home.addedToBag'))}/>}
@@ -325,11 +378,12 @@ function Home(){
   </Layout>
 }
 function ProductSection({title,subtitle,products,onAdded}:{title:string;subtitle:string;products:Product[];onAdded:()=>void}){const {t}=useI18n();return <section className="products-section"><div className="section-head"><div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div><Link to="/shop">{t('home.viewAll')} <ArrowRight/></Link></div><div className="product-grid">{products.map(p=><ProductCard key={p.id} p={p} onAdded={onAdded}/>)}</div></section>}
-function Loading(){const {t}=useI18n();return <div className="loading"><Loader2 className="spin"/></div>}
+function Loading(){const {t}=useI18n();return <div className="loading" role="status" aria-live="polite" aria-label={t('common.loading')}><Loader2 className="spin" aria-hidden="true"/></div>}
 function Shop(){
   const [products,setProducts]=useState<Product[]>([]);
   const [cats,setCats]=useState<any[]>([]);
   const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
   const [q,setQ]=useState('');
   const [searchParams,setSearchParams]=useSearchParams();
   const cat=searchParams.get('category')||'all';
@@ -337,11 +391,14 @@ function Shop(){
   const [toast,setToast]=useState('');
   const {t}=useI18n();
 
-  useEffect(()=>{
+  const load=()=>{
+    setLoading(true);setError('');
     Promise.all([api('/api/products'),api('/api/categories')])
       .then(([p,c])=>{setProducts(p);setCats(c)})
-      .finally(()=>setLoading(false))
-  },[]);
+      .catch(()=>setError(t('shop.loadError')))
+      .finally(()=>setLoading(false));
+  };
+  useEffect(()=>{load()},[]);
 
   const selectCat=(id:string)=>{
     if(id==='all')setSearchParams({});
@@ -364,10 +421,10 @@ function Shop(){
     </section>
     <section className="catalog">
       <div className="filters">
-        <label><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('shop.search')}/></label>
-        <div style={{display:'flex', gap:'12px', alignItems:'center'}}>
-          <span style={{fontSize:'12px',textTransform:'uppercase',letterSpacing:'1px',opacity:0.6}}>{t('shop.sortLabel')}</span>
-          <select value={sort} onChange={e=>setSort(e.target.value)} style={{padding:'8px', background:'var(--bg)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:'0'}}>
+        <label className="search-field"><span className="sr-only">{t('shop.search')}</span><Search aria-hidden="true"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('shop.search')}/></label>
+        <div className="sort-field">
+          <label htmlFor="shop-sort">{t('shop.sortLabel')}</label>
+          <select id="shop-sort" value={sort} onChange={e=>setSort(e.target.value)}>
             <option value="ranking">{t('shop.sortOptions.ranking')}</option>
             <option value="trending">{t('shop.sortOptions.trending')}</option>
             <option value="best">{t('shop.sortOptions.best')}</option>
@@ -378,15 +435,67 @@ function Shop(){
             <option value="az">{t('shop.sortOptions.az')}</option>
           </select>
         </div>
-        <div>
-          <button className={cat==='all'?'active':''} onClick={()=>selectCat('all')}>{t('shop.categoryAll')}</button>
-          {cats.map(c=><button key={c.id} className={cat===String(c.id)?'active':''} onClick={()=>selectCat(String(c.id))}>{c.name}</button>)}
+        <div className="filter-chips" role="group" aria-label={t('shop.eyebrow')}>
+          <button type="button" className={cat==='all'?'active':''} onClick={()=>selectCat('all')}>{t('shop.categoryAll')}</button>
+          {cats.map(c=><button type="button" key={c.id} className={cat===String(c.id)?'active':''} onClick={()=>selectCat(String(c.id))}>{c.name}</button>)}
         </div>
       </div>
-      {loading?<Loading/>:filtered.length?<div className="product-grid">{filtered.map(p=><ProductCard key={p.id} p={p} onAdded={()=>setToast(t('home.addedToBag'))}/>)}</div>:<Empty text={t('shop.emptyTitle')} action={<button className="btn" onClick={()=>setQ('')}>{t('shop.emptyAction')}</button>}/>}
+      {loading?<Loading/>:error?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:filtered.length?<div className="product-grid">{filtered.map(p=><ProductCard key={p.id} p={p} onAdded={()=>setToast(t('home.addedToBag'))}/>)}</div>:<Empty text={t('shop.emptyTitle')} action={<button type="button" className="btn" onClick={()=>{setQ('');selectCat('all')}}>{t('shop.emptyAction')}</button>}/>}
     </section>
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
   </Layout>
+}
+function ProductGallery({images,name}:{images?:string[];name:string}){
+  const pics=(images||[]).filter(Boolean);
+  const [index,setIndex]=useState(0);
+  const touchX=useRef<number|null>(null);
+  const {t}=useI18n();
+  useEffect(()=>{setIndex(0)},[name,pics.join('|')]);
+  if(!pics.length){
+    return <div className="gallery"><div className="main-image"><ProductImage alt={name}/></div></div>;
+  }
+  const safeIndex=Math.min(index,pics.length-1);
+  const go=(dir:number)=>setIndex(i=>(i+dir+pics.length)%pics.length);
+  return (
+    <div className="gallery">
+      {pics.length>1&&(
+        <div className="thumbs" role="tablist" aria-label={t('common.thumbnail')}>
+          {pics.map((src,i)=>(
+            <button type="button" key={`${src}-${i}`} className={i===safeIndex?'active':''} onClick={()=>setIndex(i)} aria-label={`${t('common.thumbnail')} ${i+1}`} aria-selected={i===safeIndex}>
+              <ProductImage src={src} alt=""/>
+            </button>
+          ))}
+        </div>
+      )}
+      <div
+        className="main-image"
+        onTouchStart={(e)=>{touchX.current=e.touches[0].clientX}}
+        onTouchEnd={(e)=>{
+          if(touchX.current==null)return;
+          const dx=e.changedTouches[0].clientX-touchX.current;
+          if(Math.abs(dx)>40)go(dx<0?1:-1);
+          touchX.current=null;
+        }}
+      >
+        <AnimatePresence mode="wait">
+          <motion.img
+            key={pics[safeIndex]}
+            src={pics[safeIndex]}
+            alt={`${name} — ${safeIndex+1}`}
+            initial={{opacity:0}}
+            animate={{opacity:1}}
+            exit={{opacity:0}}
+            transition={{duration:0.28}}
+            onError={(e)=>{(e.target as HTMLImageElement).style.display='none'}}
+          />
+        </AnimatePresence>
+        {pics.length>1&&<>
+          <button type="button" className="prev" onClick={()=>go(-1)} aria-label={t('common.previousImage')}><ChevronLeft/></button>
+          <button type="button" className="next" onClick={()=>go(1)} aria-label={t('common.nextImage')}><ChevronRight/></button>
+        </>}
+      </div>
+    </div>
+  );
 }
 function ProductDetail(){
   const {slug}=useParams();
@@ -394,103 +503,134 @@ function ProductDetail(){
   const [p,setP]=useState<Product|null>(null);
   const [related,setRelated]=useState<Product[]>([]);
   const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
   const [toast,setToast]=useState('');
+  const [color,setColor]=useState<string|undefined>();
+  const [model,setModel]=useState<string|undefined>();
   const {t}=useI18n();
   
   useEffect(()=>{
+    setLoading(true);setError('');setP(null);
     api(`/api/products?slug=${slug}`).then(d=>{
       setP(d.product);
-      setRelated(d.related);
+      setRelated(d.related||[]);
+      setColor(d.product?.colors?.[0]);
+      setModel(d.product?.models?.[0]);
       if(d.product){
         api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: d.product.id, event_type: 'view'})}).catch(console.error);
       }
-    }).catch(console.error).finally(()=>setLoading(false))
+    }).catch(()=>setError(t('product.notFound'))).finally(()=>setLoading(false))
   },[slug]);
 
   if(loading)return <Layout><Loading/></Layout>;
-  if(!p)return <Layout><Empty text={t('shop.emptyTitle')}/></Layout>;
+  if(error||!p)return <Layout><Empty text={error||t('product.notFound')} action={<Link className="btn dark-btn" to="/shop">{t('product.backToShop')}</Link>}/></Layout>;
   const level=resolveStockPriority(p);
   
   return <Layout>
     <div className="product-detail">
-      <div className="gallery"><img src={p.images?.[0]} alt={p.name}/></div>
+      <ProductGallery images={p.images} name={p.name}/>
       <div className="info">
-        <p className="eyebrow gold">{p.category?.name||'KENS'}</p>
+        <Link to="/shop" className="back-link"><ChevronLeft/> {t('product.backToShop')}</Link>
+        <p className="eyebrow gold">{p.category?.name||BRAND.fullName}</p>
         <h1>{p.name}</h1>
         <p className="price">{money(p.price)}</p>
-        <p className="inventory-status" style={{margin:'0 0 1rem',fontSize:'13px'}}>
-          {level===1?`🟢 ${t('product.inStock')}`:level===2?`🟡 ${t('product.limitedStock')}`:`🔴 ${t('product.outOfStock')}`}
+        <p className={`inventory-status tone-${level===1?'ok':level===2?'low':'out'}`}>
+          {level===1?t('product.inStock'):level===2?t('product.limitedStock'):t('product.outOfStock')}
         </p>
         <p className="desc">{p.description}</p>
         {(p.colors?.length>0||p.models?.length>0)&&<div className="options">
-          {p.colors?.length>0&&<div><span>{t('product.color')}</span><div>{p.colors.map(c=><span key={c} className="opt">{c}</span>)}</div></div>}
-          {p.models?.length>0&&<div><span>{t('product.model')}</span><div>{p.models.map(m=><span key={m} className="opt">{m}</span>)}</div></div>}
+          {p.colors?.length>0&&<div><span id="opt-color">{t('product.color')}</span><div role="group" aria-labelledby="opt-color">{p.colors.map(c=><button type="button" key={c} className={`opt ${color===c?'active':''}`} onClick={()=>setColor(c)} aria-pressed={color===c}>{c}</button>)}</div></div>}
+          {p.models?.length>0&&<div><span id="opt-model">{t('product.model')}</span><div role="group" aria-labelledby="opt-model">{p.models.map(m=><button type="button" key={m} className={`opt ${model===m?'active':''}`} onClick={()=>setModel(m)} aria-pressed={model===m}>{m}</button>)}</div></div>}
         </div>}
-        <button className="btn gold-btn" onClick={()=>{add(p);setToast(t('home.addedToBag'));api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);}} disabled={level===3}>{level===3?t('product.outOfStock'):t('product.addToCart')}</button>
-        <div className="meta"><span><Truck/> {t('product.assurance')}</span><span><Package/> Signature packaging</span></div>
+        <button type="button" className="btn gold-btn" onClick={()=>{add(p,1,color,model);setToast(t('home.addedToBag'));api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);}} disabled={level===3}>{level===3?t('product.outOfStock'):t('product.addToCart')}</button>
+        <div className="meta"><span><Truck/> {t('product.assurance')}</span><span><Package/> {t('product.packaging')}</span></div>
       </div>
     </div>
-    {related.length>0&&<ProductSection title={t('home.trendingTitle')} subtitle="" products={related} onAdded={()=>setToast(t('home.addedToBag'))}/>}
+    {related.length>0&&<ProductSection title={t('product.relatedTitle')} subtitle={t('product.relatedSub')} products={related} onAdded={()=>setToast(t('home.addedToBag'))}/>}
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
   </Layout>
 }
 function Cart(){
   const {items,update,remove,total,clear}=useCart();
   const [ordering,setOrdering]=useState(false);
+  const [toast,setToast]=useState<{text:string;tone:'ok'|'err'|'info'}|null>(null);
   const [error,setError]=useState('');
   const {t}=useI18n();
   const order=async()=>{
-    setOrdering(true);setError('');
+    if(ordering||!items.length)return;
+    setOrdering(true);setError('');setToast({text:t('cart.ordering'),tone:'info'});
     try{
       const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items.map((x:any)=>({product_id:x.product.id,product_name:x.product.name,price:x.product.price,quantity:x.quantity,color:x.color,model:x.model})),total})});
       const lines=items.map((x:any)=>`• ${x.product.name}${x.color?` · ${x.color}`:''}${x.model?` · ${x.model}`:''} × ${x.quantity}`).join('\n');
       const text=t('cart.whatsappMessage', d.order_number, lines, money(total));
+      setToast({text:t('cart.openingWhatsApp'),tone:'ok'});
       clear();
-      window.open(whatsappUrl(text),'_blank')
-    }catch(e:any){setError(e.message)}finally{setOrdering(false)}
+      window.setTimeout(()=>window.open(whatsappUrl(text),'_blank','noopener,noreferrer'),450);
+    }catch(e:any){
+      setError(e.message||t('cart.orderError'));
+      setToast({text:e.message||t('cart.orderError'),tone:'err'});
+    }finally{setOrdering(false)}
   };
-  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${i}`}><img src={x.product.images[0]} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button onClick={()=>update(i,x.quantity-1)}><Minus/></button><span>{x.quantity}</span><button onClick={()=>update(i,x.quantity+1)}><Plus/></button></div></div><button className="remove" onClick={()=>remove(i)}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button className="btn gold-btn" onClick={order} disabled={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {t('cart.orderBtn')}</button>{error&&<p className="error">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={t('cart.emptyText')} action={<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>}/>}</section></Layout>
+  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={x.product.images?.[0]} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={t('cart.emptyText')} action={<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
 }
-function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty"><Gem/><h3>{text}</h3>{action}</div>}
+function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty" role="status"><Gem aria-hidden="true"/><h3>{text}</h3>{action}</div>}
 function useAdminNoIndex(){useEffect(()=>{const meta=document.createElement('meta');meta.name='robots';meta.content='noindex, nofollow, noarchive';document.head.appendChild(meta);const oldTitle=document.title;document.title='Private Portal';return()=>{meta.remove();document.title=oldTitle}},[])}
 function Protected({children}:{children:React.ReactNode}){const {user,loading}=useAuth();if(loading)return <Loading/>;return user?children:<Navigate to="/admin/login" replace/>}
 function Login(){
   useAdminNoIndex();const {user}=useAuth();const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false);const {t}=useI18n();
   if(user)return <Navigate to="/admin/dashboard" replace/>;
-  const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setError(t('admin.invalidLogin'));setBusy(false)};
+  const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');if(!supabase){setError(t('admin.invalidLogin'));setBusy(false);return;}const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setError(t('admin.invalidLogin'));setBusy(false)};
   return <main className="login"><BrandMark className="inverse"/><div className="login-card"><p className="eyebrow gold">{t('admin.loginPortal')}</p><h1>{t('admin.loginTitle')}</h1><p>{t('admin.loginSub')}</p><form onSubmit={submit}><label>{t('admin.email')}<input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" required/></label><label>{t('admin.password')}<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" minLength={6} required/></label>{error&&<p className="error">{error}</p>}<button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:t('admin.signInBtn')}</button></form></div></main>
 }
 function AdminShell({children}:{children:React.ReactNode}){
   useAdminNoIndex();const [open,setOpen]=useState(false);const nav=useNavigate();const {t, lang, setLang}=useI18n();
-  const logout=async()=>{await supabase.auth.signOut();nav('/admin/login')};
-  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button className="close-admin" onClick={()=>setOpen(false)}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink></nav><button onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button onClick={()=>setOpen(true)}><Menu/></button><div style={{display:'flex', gap:'1rem', alignItems:'center'}}><button className="theme-toggle" onClick={()=>setLang(lang==='fr'?'en':'fr')} style={{fontSize: '11px', fontWeight:'bold', letterSpacing:'1px'}}>{lang.toUpperCase()}</button><span>{t('admin.shopManager')}</span><CircleUser/></div></header>{children}</div></div>
+  const {theme, toggle}=useThemeMode();
+  const ThemeIcon = theme === 'light' ? Sun : Moon;
+  const themeLabel = theme === 'light' ? t('header.themeDark') : t('header.themeLight');
+  const logout=async()=>{await supabase?.auth.signOut();nav('/admin/login')};
+  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button type="button" className="close-admin" onClick={()=>setOpen(false)} aria-label={t('common.close')}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink></nav><button type="button" onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button type="button" onClick={()=>setOpen(true)} aria-label={t('header.menu')}><Menu/></button><div className="head-actions admin-head-actions"><button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button><button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button><span>{t('admin.shopManager')}</span><CircleUser aria-hidden="true"/></div></header>{children}</div></div>
 }
 function AdminDashboard(){
   const [data,setData]=useState<any>(null);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
   const {session}=useAuth();
   const {t}=useI18n();
-  useEffect(()=>{if(session?.access_token)api('/api/dashboard',{headers:{Authorization:`Bearer ${session.access_token}`}}).then(setData)},[session]);
-  if(!data)return <AdminShell><Loading/></AdminShell>;
+  const load=()=>{
+    if(!session?.access_token){setLoading(false);return;}
+    setLoading(true);setError('');
+    api('/api/dashboard',{headers:{Authorization:`Bearer ${session.access_token}`}})
+      .then((d)=>{setData(d);if(d?.error)setError(d.error)})
+      .catch((e:any)=>setError(e.message||t('home.loadError')))
+      .finally(()=>setLoading(false));
+  };
+  useEffect(()=>{load()},[session?.access_token]);
+  if(loading)return <AdminShell><Loading/></AdminShell>;
+  const d=data||{
+    totalProducts:0,available:0,lowStock:0,outOfStock:0,ordersToday:0,pending:0,delivered:0,revenue:0,
+    recent:[],trendingProduct:null,bestSeller:null,mostViewed:null,mostCart:null,highestRevenue:null,runningLow:[],
+  };
   const cards=[
-    [t('admin.stats.totalProducts'),data.totalProducts,Gem],
-    [t('admin.stats.available'),data.available,Check],
-    [t('admin.stats.lowStock'),data.lowStock,TrendingUp],
-    [t('admin.stats.outOfStock'),data.outOfStock,Package],
-    [t('admin.stats.ordersToday'),data.ordersToday,MessageCircle],
-    [t('admin.stats.pending'),data.pending,MessageCircle],
-    [t('admin.stats.delivered'),data.delivered,Check],
-    [t('admin.stats.revenue'),money(data.revenue||0),Sparkles],
+    [t('admin.stats.totalProducts'),d.totalProducts,Gem],
+    [t('admin.stats.available'),d.available,Check],
+    [t('admin.stats.lowStock'),d.lowStock,TrendingUp],
+    [t('admin.stats.outOfStock'),d.outOfStock,Package],
+    [t('admin.stats.ordersToday'),d.ordersToday,MessageCircle],
+    [t('admin.stats.pending'),d.pending,MessageCircle],
+    [t('admin.stats.delivered'),d.delivered,Check],
+    [t('admin.stats.revenue'),money(d.revenue||0),Sparkles],
   ];
   const widgets=[
-    {icon:'🔥',label:t('admin.widgets.trending'),product:data.trendingProduct},
-    {icon:'🏆',label:t('admin.widgets.bestSeller'),product:data.bestSeller},
-    {icon:'👀',label:t('admin.widgets.mostViewed'),product:data.mostViewed},
-    {icon:'🛒',label:t('admin.widgets.mostCart'),product:data.mostCart},
-    {icon:'💰',label:t('admin.widgets.highestRevenue'),product:data.highestRevenue},
+    {icon:'🔥',label:t('admin.widgets.trending'),product:d.trendingProduct},
+    {icon:'🏆',label:t('admin.widgets.bestSeller'),product:d.bestSeller},
+    {icon:'👀',label:t('admin.widgets.mostViewed'),product:d.mostViewed},
+    {icon:'🛒',label:t('admin.widgets.mostCart'),product:d.mostCart},
+    {icon:'💰',label:t('admin.widgets.highestRevenue'),product:d.highestRevenue},
   ];
-  const runningLow=data.runningLow||[];
+  const runningLow=d.runningLow||[];
   return <AdminShell><section className="admin-content">
     <div className="admin-title"><div><p className="eyebrow gold">{t('admin.dashboardEyebrow')}</p><h1>{t('admin.dashboardTitle')}</h1></div><Link to="/admin/products" className="btn gold-btn"><Plus/> {t('admin.addProduct')}</Link></div>
+    {error&&<p className="error" role="alert" style={{marginBottom:'1.25rem'}}>{error} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
     <div className="stat-grid simple-stats">{cards.map(([n,v,I]:any)=><article key={n}><I/><span>{n}</span><strong>{v}</strong></article>)}</div>
     <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.analyticsEyebrow')}</p><h2>{t('admin.analyticsTitle')}</h2></div></div>
     <div className="stat-grid simple-stats">{widgets.map(w=><article key={w.label}><span style={{fontSize:'1.5rem'}}>{w.icon}</span><span>{w.label}</span><strong style={{fontSize:'0.85rem',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{w.product?.name||'—'}</strong></article>)}</div>
@@ -506,25 +646,62 @@ function AdminDashboard(){
       </article>
       <article>
         <div className="panel-head"><p className="eyebrow">{t('admin.latestOrders')}</p><Link to="/admin/orders">{t('admin.viewAllOrders')}</Link></div>
-        {(data.recent||[]).map((o:any)=><Link className="mini-order" to="/admin/orders" key={o.id}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleDateString()}</span></div><strong>{money(o.total)}</strong><Status status={t(`admin.orderStatuses.${o.status}`)||o.status}/></Link>)}
+        {(d.recent||[]).length?(d.recent||[]).map((o:any)=><Link className="mini-order" to="/admin/orders" key={o.id}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleDateString()}</span></div><strong>{money(o.total)}</strong><Status status={t(`admin.orderStatuses.${o.status}`)||o.status}/></Link>):<p className="fine" style={{padding:'12px 0'}}>{t('admin.noOrders')}</p>}
       </article>
     </div>
   </section></AdminShell>
 }
 const authHeaders=(token?:string)=>({'Content-Type':'application/json',Authorization:`Bearer ${token}`});
-function AdminProducts(){const [products,setProducts]=useState<Product[]>([]);const [cats,setCats]=useState<any[]>([]);const [q,setQ]=useState('');const [editing,setEditing]=useState<any>(null);const [error,setError]=useState('');const {session}=useAuth();const {t}=useI18n();const load=()=>Promise.all([api('/api/products?admin=true',{headers:authHeaders(session?.access_token)}),api('/api/categories')]).then(([p,c])=>{setProducts(p);setCats(c)});useEffect(()=>{load()},[]);const del=async(id:string|number)=>{if(!confirm(t('admin.confirmDelete')))return;await api('/api/products',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});load()};return <AdminShell><section className="admin-content"><div className="admin-title"><div><p className="eyebrow gold">{t('admin.productsEyebrow')}</p><h1>{t('admin.productsTitle')}</h1></div><button className="btn gold-btn" onClick={()=>setEditing({})}><Plus/> {t('admin.addProduct')}</button></div><label className="admin-search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchProduct')}/></label><div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th></th></tr></thead><tbody>{products.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())).map(p=><tr key={p.id}><td><div className="table-product"><img src={p.images[0]}/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button onClick={()=>setEditing(p)}><Pencil/></button><button onClick={()=>del(p.id)}><Trash2/></button></td></tr>)}</tbody></table></div>{editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>setEditing(null)} done={()=>{setEditing(null);load()}} error={error} setError={setError}/>}</section></AdminShell>}
+function AdminProducts(){
+  const [products,setProducts]=useState<Product[]>([]);
+  const [cats,setCats]=useState<any[]>([]);
+  const [q,setQ]=useState('');
+  const [editing,setEditing]=useState<any>(null);
+  const [error,setError]=useState('');
+  const [loading,setLoading]=useState(true);
+  const [toast,setToast]=useState('');
+  const {session}=useAuth();
+  const {t}=useI18n();
+  const load=()=>{
+    if(!session?.access_token)return;
+    setLoading(true);
+    Promise.all([api('/api/products?admin=true',{headers:authHeaders(session.access_token)}),api('/api/categories')])
+      .then(([p,c])=>{setProducts(p);setCats(c);setError('')})
+      .catch(()=>setError(t('admin.productsLoadError')))
+      .finally(()=>setLoading(false));
+  };
+  useEffect(()=>{load()},[session?.access_token]);
+  const del=async(id:string|number)=>{
+    if(!confirm(t('admin.confirmDelete')))return;
+    try{
+      await api('/api/products',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});
+      setToast(t('admin.productDeleted'));
+      load();
+    }catch(e:any){setError(e.message||t('admin.productSaveError'))}
+  };
+  return <AdminShell><section className="admin-content">
+    <div className="admin-title"><div><p className="eyebrow gold">{t('admin.productsEyebrow')}</p><h1>{t('admin.productsTitle')}</h1></div><button type="button" className="btn gold-btn" onClick={()=>setEditing({})}><Plus/> {t('admin.addProduct')}</button></div>
+    <label className="admin-search"><Search aria-hidden="true"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchProduct')} aria-label={t('admin.searchProduct')}/></label>
+    {loading?<Loading/>:error&&!products.length?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:(
+      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{products.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())).map(p=><tr key={p.id}><td><div className="table-product"><ProductImage src={p.images?.[0]} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td></tr>)}</tbody></table></div>
+    )}
+    {editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>{setEditing(null);setError('')}} done={()=>{setEditing(null);setToast(t('admin.productSaved'));load()}} error={error} setError={setError}/>}
+    <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
+  </section></AdminShell>;
+}
 function Stock({n,threshold=5,priority}:{n:number;threshold?:number;priority?:number}){
   const {t}=useI18n();
   const level=resolveStockPriority({stock_quantity:n,low_stock_threshold:threshold,stockPriority:priority});
   return <span className={`stock ${level===3?'out':level===2?'low':''}`}><i/>{level===3?t('admin.stockState.out'):level===2?`${n} · ${t('admin.stockState.low')}`:`${n} ${t('admin.stockState.available')}`}</span>
 }
 function ProductModal({item,cats,token,close,done,error,setError}:any){
+  const {t}=useI18n();
   const [form,setForm]=useState({
     name:item.name||'',
     short_description:item.short_description||'',
     description:item.description||'',
-    price:item.price||'',
-    category_id:item.category_id||cats[0]?.id,
+    price:item.price??'',
+    category_id:item.category_id||cats[0]?.id||'',
     stock_quantity:item.stock_quantity??1,
     low_stock_threshold:item.low_stock_threshold??5,
     colors:(item.colors||[]).join(', '),
@@ -535,27 +712,47 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     active:item.active??true,
     display_priority:item.display_priority??'',
   });
-  const [busy,setBusy]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [uploading,setUploading]=useState(false);
+  const busy=saving||uploading;
   const set=(k:string,v:any)=>setForm(x=>({...x,[k]:v}));
+  const validate=()=>{
+    if(!form.name.trim())return t('admin.validationName');
+    if(!form.short_description.trim())return t('admin.validationShort');
+    if(!form.description.trim())return t('admin.validationDesc');
+    if(form.price===''||Number(form.price)<0||Number.isNaN(Number(form.price)))return t('admin.validationPrice');
+    if(!form.category_id)return t('admin.validationCategory');
+    if(form.stock_quantity===''||Number(form.stock_quantity)<0||Number.isNaN(Number(form.stock_quantity)))return t('admin.validationStock');
+    if(!form.images.length)return t('admin.modal.errorImage');
+    return '';
+  };
   const upload=async(files:FileList|null)=>{
-    if(!files)return;setBusy(true);
+    if(!files?.length||busy)return;
+    setUploading(true);setError('');
     try{
       const urls=[];
       for(const file of Array.from(files)){
-        const base64=await new Promise<string>((resolve)=>{const r=new FileReader();r.onload=()=>resolve((r.result as string).split(',')[1]);r.readAsDataURL(file)});
-        const d=await api('/api/upload',{method:'POST',headers:authHeaders(token),body:JSON.stringify({fileName:`${Date.now()}-${file.name}`,fileBase64:base64,contentType:file.type})});
+        if(!file.type.startsWith('image/'))continue;
+        const base64=await new Promise<string>((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve((r.result as string).split(',')[1]);r.onerror=()=>reject(new Error(t('admin.uploadError')));r.readAsDataURL(file)});
+        const d=await api('/api/upload',{method:'POST',headers:authHeaders(token),body:JSON.stringify({fileName:`${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`,fileBase64:base64,contentType:file.type})});
         urls.push(d.url);
       }
-      set('images',[...form.images,...urls]);
-    }catch(e:any){setError(e.message)}finally{setBusy(false)}
+      if(!urls.length)throw new Error(t('admin.uploadError'));
+      setForm(x=>({...x,images:[...x.images,...urls]}));
+    }catch(e:any){setError(e.message||t('admin.uploadError'))}finally{setUploading(false)}
   };
   const save=async(e:FormEvent)=>{
     e.preventDefault();
-    if(!form.images.length)return setError('Upload at least one image.');
-    setBusy(true);setError('');
+    if(busy)return;
+    const v=validate();
+    if(v){setError(v);return}
+    setSaving(true);setError('');
     try{
       await api('/api/products',{method:item.id?'PUT':'POST',headers:authHeaders(token),body:JSON.stringify({
         ...form,id:item.id,
+        name:form.name.trim(),
+        short_description:form.short_description.trim(),
+        description:form.description.trim(),
         price:Number(form.price),
         stock_quantity:Number(form.stock_quantity),
         low_stock_threshold:Number(form.low_stock_threshold),
@@ -564,32 +761,56 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
         models:form.models.split(',').map((x:string)=>x.trim()).filter(Boolean),
       })});
       done();
-    }catch(e:any){setError(e.message)}finally{setBusy(false)}
+    }catch(e:any){setError(e.message||t('admin.productSaveError'))}finally{setSaving(false)}
   };
-  return <div className="modal-bg"><form className="modal" onSubmit={save}>
-    <div className="modal-head"><div><p className="eyebrow gold">{item.id?'EDIT PRODUCT':'NEW PRODUCT'}</p><h2>{item.id?'Product details':'Add a product'}</h2></div><button type="button" onClick={close}><X/></button></div>
-    <div className="form-grid">
-      <label className="full">Product name<input value={form.name} onChange={e=>set('name',e.target.value)} required/></label>
-      <label className="full">Short description<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} required/></label>
-      <label className="full">Description<textarea value={form.description} onChange={e=>set('description',e.target.value)} required/></label>
-      <label>Price (USD)<input type="number" min="0" step="0.01" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
-      <label>Category<select value={form.category_id} onChange={e=>set('category_id',e.target.value)}>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-      <label>Stock Quantity<input type="number" min="0" value={form.stock_quantity} onChange={e=>set('stock_quantity',e.target.value)} required/></label>
-      <label>Low Stock Threshold<input type="number" min="0" value={form.low_stock_threshold} onChange={e=>set('low_stock_threshold',e.target.value)}/></label>
-      <label>Display Priority (optional)<input type="number" min="1" value={form.display_priority} onChange={e=>set('display_priority',e.target.value)} placeholder="e.g. 1 = top"/></label>
-      <label>Colors (optional)<input value={form.colors} onChange={e=>set('colors',e.target.value)} placeholder="Black, Gold"/></label>
-      <label>Models (optional)<input value={form.models} onChange={e=>set('models',e.target.value)} placeholder="Small, Large"/></label>
-      <label className="full upload">Photos<input type="file" accept="image/*" multiple onChange={e=>upload(e.target.files)}/><span><Plus/> {busy?'Uploading…':'Choose photos'}</span></label>
-      <div className="image-preview full">{form.images.map((im:string,i:number)=><div key={i}><img src={im}/><button type="button" onClick={()=>set('images',form.images.filter((_:string,n:number)=>n!==i))}><X/></button></div>)}</div>
-      <div className="checks full">
-        <label><input type="checkbox" checked={form.featured} onChange={e=>set('featured',e.target.checked)}/> ⭐ Featured (always shown first)</label>
-        <label><input type="checkbox" checked={form.hidden} onChange={e=>set('hidden',e.target.checked)}/> 🚫 Hidden (not visible in shop)</label>
-        <label><input type="checkbox" checked={form.active} onChange={e=>set('active',e.target.checked)}/> ✅ Available for sale</label>
+  return <div className="modal-bg" role="presentation" onClick={(e)=>{if(e.target===e.currentTarget&&!busy)close()}}>
+    <form className="modal" onSubmit={save} aria-busy={busy} noValidate>
+      <div className="modal-head">
+        <div>
+          <p className="eyebrow gold">{item.id?t('admin.modal.editProduct'):t('admin.modal.newProduct')}</p>
+          <h2>{item.id?t('admin.modal.productDetails'):t('admin.modal.addTitle')}</h2>
+        </div>
+        <button type="button" onClick={close} aria-label={t('common.close')} disabled={busy}><X/></button>
       </div>
-    </div>
-    {error&&<p className="error">{error}</p>}
-    <div className="modal-actions"><button type="button" onClick={close}>Cancel</button><button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} Save product</button></div>
-  </form></div>
+      <div className="form-grid">
+        <label className="full">{t('admin.modal.name')}<input value={form.name} onChange={e=>set('name',e.target.value)} required maxLength={120} autoFocus/></label>
+        <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} required maxLength={180}/></label>
+        <label className="full">{t('admin.modal.desc')}<textarea value={form.description} onChange={e=>set('description',e.target.value)} required rows={4}/></label>
+        <label>{t('admin.modal.price')}<input type="number" min="0" step="0.01" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
+        <label>{t('admin.modal.category')}<select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+        <label>{t('admin.modal.stockQty')}<input type="number" min="0" value={form.stock_quantity} onChange={e=>set('stock_quantity',e.target.value)} required/></label>
+        <label>{t('admin.modal.lowStockThresh')}<input type="number" min="0" value={form.low_stock_threshold} onChange={e=>set('low_stock_threshold',e.target.value)}/></label>
+        <label>{t('admin.modal.priority')}<input type="number" min="1" value={form.display_priority} onChange={e=>set('display_priority',e.target.value)} placeholder={t('admin.priorityPlaceholder')}/></label>
+        <label>{t('admin.modal.colors')}<input value={form.colors} onChange={e=>set('colors',e.target.value)} placeholder={t('admin.colorsPlaceholder')}/></label>
+        <label>{t('admin.modal.models')}<input value={form.models} onChange={e=>set('models',e.target.value)} placeholder={t('admin.modelsPlaceholder')}/></label>
+        <label className={`full upload ${uploading?'is-busy':''}`}>
+          {t('admin.modal.photos')}
+          <input type="file" accept="image/*" multiple disabled={busy} onChange={e=>{upload(e.target.files);e.target.value=''}}/>
+          <span><Plus/> {uploading?t('admin.uploadProgress'):t('admin.modal.choosePhotos')}</span>
+        </label>
+        <p className="fine full upload-hint">{t('admin.modal.photosHint')}</p>
+        <div className="image-preview full">
+          {form.images.map((im:string,i:number)=>(
+            <div key={`${im}-${i}`}>
+              <ProductImage src={im} alt=""/>
+              {i===0&&<em className="cover-tag">1</em>}
+              <button type="button" onClick={()=>set('images',form.images.filter((_:string,n:number)=>n!==i))} aria-label={t('admin.removeImage')} disabled={busy}><X/></button>
+            </div>
+          ))}
+        </div>
+        <div className="checks full">
+          <label><input type="checkbox" checked={form.featured} onChange={e=>set('featured',e.target.checked)}/> {t('admin.modal.featuredCheck')}</label>
+          <label><input type="checkbox" checked={form.hidden} onChange={e=>set('hidden',e.target.checked)}/> {t('admin.modal.hiddenCheck')}</label>
+          <label><input type="checkbox" checked={form.active} onChange={e=>set('active',e.target.checked)}/> {t('admin.modal.activeCheck')}</label>
+        </div>
+      </div>
+      {error&&<p className="error" role="alert">{error}</p>}
+      <div className="modal-actions">
+        <button type="button" onClick={close} disabled={busy}>{t('admin.modal.cancel')}</button>
+        <button className="btn gold-btn" disabled={busy} aria-busy={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {saving?t('admin.modal.saving'):t('admin.modal.save')}</button>
+      </div>
+    </form>
+  </div>
 }
 const statuses=['Pending','Discussing on WhatsApp','Confirmed','Preparing','Out for Delivery','Delivered','Cancelled'];
 function Status({status}:{status:string}){return <span className={`status s-${status.toLowerCase().replaceAll(' ','-')}`}>{status}</span>}
@@ -597,21 +818,36 @@ function AdminHero(){
   const [slides,setSlides]=useState<any[]>([]);
   const [editing,setEditing]=useState<any|null>(null);
   const [busy,setBusy]=useState(false);
+  const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
+  const [toast,setToast]=useState('');
   const {session}=useAuth();
   const {t}=useI18n();
-  const load=()=>api('/api/hero?admin=true',{headers:authHeaders(session?.access_token)}).then(setSlides);
-  useEffect(()=>{if(session?.access_token)load()},[session]);
+  const load=()=>{
+    if(!session?.access_token)return;
+    setLoading(true);
+    api('/api/hero?admin=true',{headers:authHeaders(session.access_token)})
+      .then((data)=>{setSlides(Array.isArray(data)?data:[]);setError('')})
+      .catch((e:any)=>setError(e.message||t('admin.heroEmpty')))
+      .finally(()=>setLoading(false));
+  };
+  useEffect(()=>{if(session?.access_token)load()},[session?.access_token]);
 
   const upload=async(files:FileList|null)=>{
     if(!files?.length||!editing)return;
     setBusy(true);setError('');
     try{
       const file=files[0];
-      const base64=await new Promise<string>((resolve)=>{const r=new FileReader();r.onload=()=>resolve((r.result as string).split(',')[1]);r.readAsDataURL(file)});
-      const d=await api('/api/upload',{method:'POST',headers:authHeaders(session?.access_token),body:JSON.stringify({fileName:`hero-${Date.now()}-${file.name}`,fileBase64:base64,contentType:file.type})});
+      const base64=await new Promise<string>((resolve,reject)=>{
+        const r=new FileReader();
+        r.onload=()=>resolve((r.result as string).split(',')[1]);
+        r.onerror=()=>reject(new Error(t('admin.uploadError')));
+        r.readAsDataURL(file);
+      });
+      const d=await api('/api/upload',{method:'POST',headers:authHeaders(session?.access_token),body:JSON.stringify({fileName:`hero-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`,fileBase64:base64,contentType:file.type||'image/jpeg'})});
+      if(!d?.url)throw new Error(t('admin.uploadError'));
       setEditing((x:any)=>({...x,image_url:d.url}));
-    }catch(e:any){setError(e.message)}finally{setBusy(false)}
+    }catch(e:any){setError(e.message||t('admin.uploadError'))}finally{setBusy(false)}
   };
 
   const save=async(e:FormEvent)=>{
@@ -619,24 +855,35 @@ function AdminHero(){
     if(!editing?.image_url)return setError(t('admin.heroImageRequired'));
     setBusy(true);setError('');
     try{
+      const isNew=!editing.id;
+      const payload={
+        title:editing.title||null,
+        subtitle:editing.subtitle||null,
+        cta_label:editing.cta_label||null,
+        cta_href:editing.cta_href||'/shop',
+        display_order:Number(editing.display_order)||1,
+        enabled:editing.enabled!==false,
+        image_url:editing.image_url,
+        ...(isNew?{}:{id:editing.id}),
+      };
       await api('/api/hero',{
-        method:editing.id?'PUT':'POST',
+        method:isNew?'POST':'PUT',
         headers:authHeaders(session?.access_token),
-        body:JSON.stringify({
-          ...editing,
-          display_order:Number(editing.display_order)||0,
-          enabled:!!editing.enabled,
-        }),
+        body:JSON.stringify(payload),
       });
       setEditing(null);
+      setToast(isNew?t('admin.heroAdd'):t('admin.save'));
       load();
-    }catch(err:any){setError(err.message)}finally{setBusy(false)}
+    }catch(err:any){setError(err.message||t('admin.productSaveError'))}finally{setBusy(false)}
   };
 
   const remove=async(id:string)=>{
     if(!confirm(t('admin.heroConfirmDelete')))return;
-    await api('/api/hero',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});
-    load();
+    setError('');
+    try{
+      await api('/api/hero',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});
+      load();
+    }catch(e:any){setError(e.message)}
   };
 
   const move=async(index:number,delta:number)=>{
@@ -649,24 +896,29 @@ function AdminHero(){
       const updated=await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({orderedIds:next.map(s=>s.id)})});
       if(Array.isArray(updated))setSlides(updated);
       else load();
-    }catch{load()}
+    }catch(e:any){setError(e.message);load()}
   };
 
   const toggle=async(slide:any)=>{
-    await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({id:slide.id,enabled:!slide.enabled})});
-    load();
+    setError('');
+    try{
+      await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({id:slide.id,enabled:!slide.enabled})});
+      load();
+    }catch(e:any){setError(e.message)}
   };
 
   return <AdminShell><section className="admin-content">
     <div className="admin-title">
       <div><p className="eyebrow gold">{t('admin.heroEyebrow')}</p><h1>{t('admin.heroTitle')}</h1></div>
-      <button className="btn gold-btn" onClick={()=>setEditing({title:'',subtitle:'',cta_label:t('home.exploreBtn'),cta_href:'/shop',display_order:(slides.length+1),enabled:true,image_url:''})}><Plus/> {t('admin.heroAdd')}</button>
+      <button type="button" className="btn gold-btn" onClick={()=>setEditing({title:'',subtitle:'',cta_label:t('home.exploreBtn'),cta_href:'/shop',display_order:(slides.length+1),enabled:true,image_url:''})}><Plus/> {t('admin.heroAdd')}</button>
     </div>
     <p className="fine" style={{marginTop:'-1rem',marginBottom:'1.5rem'}}>{t('admin.heroHelp')}</p>
+    {error&&!editing&&<p className="error" role="alert">{error}</p>}
+    {loading?<Loading/>:(
     <div className="hero-admin-list">
       {slides.map((s,i)=>(
         <article key={s.id} className={`hero-admin-card ${s.enabled?'':'disabled'}`}>
-          <img src={s.image_url} alt={s.title||t('admin.heroAlt')}/>
+          <ProductImage src={s.image_url} alt={s.title||t('admin.heroAlt')}/>
           <div>
             <b>{s.title||t('admin.heroUntitled')}</b>
             <span>{t('admin.heroOrder')}: {s.display_order} · {s.enabled?t('admin.heroEnabled'):t('admin.heroDisabled')}</span>
@@ -676,28 +928,30 @@ function AdminHero(){
             <button type="button" onClick={()=>move(i,-1)} aria-label={t('admin.heroMoveUp')} disabled={i===0}><ChevronLeft/></button>
             <button type="button" onClick={()=>move(i,1)} aria-label={t('admin.heroMoveDown')} disabled={i===slides.length-1}><ChevronRight/></button>
             <button type="button" onClick={()=>toggle(s)}>{s.enabled?t('admin.heroDisable'):t('admin.heroEnable')}</button>
-            <button type="button" onClick={()=>setEditing(s)}><Pencil/></button>
-            <button type="button" onClick={()=>remove(s.id)}><Trash2/></button>
+            <button type="button" onClick={()=>{setError('');setEditing(s)}} aria-label={t('common.edit')}><Pencil/></button>
+            <button type="button" onClick={()=>remove(s.id)} aria-label={t('common.delete')}><Trash2/></button>
           </div>
         </article>
       ))}
       {!slides.length&&<Empty text={t('admin.heroEmpty')}/>}
     </div>
+    )}
     {editing&&<div className="modal-bg"><form className="modal" onSubmit={save}>
-      <div className="modal-head"><div><p className="eyebrow gold">{editing.id?t('admin.heroEdit'):t('admin.heroNew')}</p><h2>{t('admin.heroTitle')}</h2></div><button type="button" onClick={()=>setEditing(null)}><X/></button></div>
+      <div className="modal-head"><div><p className="eyebrow gold">{editing.id?t('admin.heroEdit'):t('admin.heroNew')}</p><h2>{t('admin.heroTitle')}</h2></div><button type="button" onClick={()=>setEditing(null)} aria-label={t('common.close')}><X/></button></div>
       <div className="form-grid">
         <label className="full">{t('admin.heroTitleField')}<input value={editing.title||''} onChange={e=>setEditing({...editing,title:e.target.value})}/></label>
         <label className="full">{t('admin.heroSubtitle')}<textarea value={editing.subtitle||''} onChange={e=>setEditing({...editing,subtitle:e.target.value})}/></label>
         <label>{t('admin.heroCtaLabel')}<input value={editing.cta_label||''} onChange={e=>setEditing({...editing,cta_label:e.target.value})}/></label>
         <label>{t('admin.heroCtaHref')}<input value={editing.cta_href||'/shop'} onChange={e=>setEditing({...editing,cta_href:e.target.value})}/></label>
         <label>{t('admin.heroOrder')}<input type="number" min="1" value={editing.display_order??1} onChange={e=>setEditing({...editing,display_order:e.target.value})}/></label>
-        <label className="checks"><input type="checkbox" checked={!!editing.enabled} onChange={e=>setEditing({...editing,enabled:e.target.checked})}/> {t('admin.heroEnabled')}</label>
+        <label className="checks"><input type="checkbox" checked={editing.enabled!==false} onChange={e=>setEditing({...editing,enabled:e.target.checked})}/> {t('admin.heroEnabled')}</label>
         <label className="full upload">{t('admin.heroImage')}<input type="file" accept="image/*" onChange={e=>upload(e.target.files)}/><span><Plus/> {busy?t('admin.modal.uploading'):t('admin.heroChooseImage')}</span></label>
-        {editing.image_url?<div className="image-preview full"><div><img src={editing.image_url}/></div></div>:null}
+        {editing.image_url?<div className="image-preview full"><div><img src={editing.image_url} alt=""/></div></div>:null}
       </div>
-      {error&&<p className="error">{error}</p>}
-      <div className="modal-actions"><button type="button" onClick={()=>setEditing(null)}>{t('admin.heroCancel')}</button><button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
+      {error&&<p className="error" role="alert">{error}</p>}
+      <div className="modal-actions"><button type="button" onClick={()=>setEditing(null)} disabled={busy}>{t('admin.heroCancel')}</button><button className="btn gold-btn" disabled={busy} aria-busy={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
     </form></div>}
+    <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
   </section></AdminShell>;
 }
 function AdminOrders(){
@@ -712,7 +966,7 @@ function OrderDrawer({order,token,close,done}:any){
   const save=async(status?:string)=>{setBusy(true);await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({...form,status:status||form.status})});setBusy(false);done()};
   const customerWa=(form.whatsapp_number||SOCIAL.whatsappNumber).replace(/\D/g,'');
   const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+form.order_number)}`;
-  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2>{t('admin.orderDetails')}</h2></div><button onClick={close}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><img src={x.product?.images?.[0]}/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={waHref} target="_blank" rel="noreferrer"><MessageCircle/> WhatsApp</a><button onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button className="danger" onClick={()=>save('Cancelled')}>{t('admin.cancelOrder')}</button><button className="btn dark-btn" onClick={()=>save('Delivered')}>{t('admin.markDelivered')}</button><button className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
+  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title"><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><ProductImage src={x.product?.images?.[0]} alt=""/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a><button type="button" onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button type="button" onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button type="button" className="danger" onClick={()=>save('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button><button type="button" className="btn dark-btn" onClick={()=>save('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button><button type="button" className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
 }
 export default function App(){
   return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>

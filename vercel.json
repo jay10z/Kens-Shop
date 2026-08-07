@@ -1,28 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/admin",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
-    },
-    {
-      "source": "/admin/:path*",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/shop",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/product/:path*",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/cart",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/api/track",
-      "destination": "/api/track.js"
     }
   ]
 }

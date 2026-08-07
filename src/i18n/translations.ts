@@ -8,7 +8,22 @@ export const translations = {
       themeLight: 'Light Mode',
       themeDark: 'Dark Mode',
       cart: 'Cart',
-      menu: 'Menu'
+      menu: 'Menu',
+      lang: 'Switch language',
+    },
+    common: {
+      loading: 'Loading',
+      retry: 'Try again',
+      close: 'Close',
+      decreaseQty: 'Decrease quantity',
+      increaseQty: 'Increase quantity',
+      removeItem: 'Remove item',
+      edit: 'Edit',
+      delete: 'Delete',
+      imageUnavailable: 'Image unavailable',
+      previousImage: 'Previous image',
+      nextImage: 'Next image',
+      thumbnail: 'Thumbnail',
     },
     footer: {
       description: 'Perfumes, watches and accessories — selected with care for a quieter kind of luxury.',
@@ -42,6 +57,7 @@ export const translations = {
       newArrivalsSub: 'RECENTLY ADDED',
       viewAll: 'View all',
       addedToBag: 'Added to your bag',
+      loadError: 'We could not load the collection.',
       heroPrev: 'Previous slide',
       heroNext: 'Next slide',
       heroDots: 'Hero slides',
@@ -79,7 +95,12 @@ export const translations = {
       color: 'Color',
       quantity: 'Quantity',
       total: 'Total',
-      assurance: 'Secure, verified communication.'
+      assurance: 'Secure, verified communication.',
+      packaging: 'Signature packaging',
+      notFound: 'This piece is no longer available.',
+      relatedTitle: 'You may also like',
+      relatedSub: 'RELATED',
+      backToShop: 'Back to catalog',
     },
     shop: {
       title: 'Our Collection',
@@ -87,6 +108,7 @@ export const translations = {
       search: 'Search pieces...',
       categoryAll: 'All pieces',
       sortLabel: 'Sort by:',
+      loadError: 'Unable to load the catalog.',
       sortOptions: {
         ranking: 'Recommended',
         trending: 'Trending',
@@ -115,6 +137,9 @@ export const translations = {
       continue: 'Continue shopping',
       emptyText: 'Your selection is waiting for something exceptional.',
       emptyBtn: 'Explore collection',
+      ordering: 'Reserving your order…',
+      openingWhatsApp: 'Order reserved. Opening WhatsApp…',
+      orderError: 'We could not reserve your order. Please try again.',
       whatsappMessage: (orderNumber: string, lines: string, total: string) => `Hello,\n\nI would like to place the following order (${orderNumber}):\n\n${lines}\n\nTotal: ${total}\n\nI would like more information regarding delivery.\n\nThank you.`
     },
     admin: {
@@ -200,6 +225,22 @@ export const translations = {
         available: 'available'
       },
       confirmDelete: 'Delete this product?',
+      productsLoadError: 'Unable to load products.',
+      productSaved: 'Product saved successfully.',
+      productDeleted: 'Product deleted.',
+      productSaveError: 'Could not save the product.',
+      uploadError: 'Image upload failed. Please try again.',
+      uploadProgress: 'Uploading images…',
+      validationName: 'Product name is required.',
+      validationShort: 'Short description is required.',
+      validationDesc: 'Description is required.',
+      validationPrice: 'Enter a valid price.',
+      validationCategory: 'Select a category.',
+      validationStock: 'Stock quantity must be 0 or more.',
+      priorityPlaceholder: 'e.g. 1 = top',
+      colorsPlaceholder: 'Black, Gold',
+      modelsPlaceholder: 'Small, Large',
+      removeImage: 'Remove image',
       
       ordersTitle: 'Orders',
       clientOrdersEyebrow: 'CLIENT ORDERS',
@@ -254,7 +295,9 @@ export const translations = {
         activeCheck: '✅ Available for sale',
         cancel: 'Cancel',
         save: 'Save product',
-        errorImage: 'Upload at least one image.'
+        saving: 'Saving…',
+        errorImage: 'Upload at least one image.',
+        photosHint: 'Add clear product photos. First image is the cover.'
       },
       
       drawer: {
@@ -271,7 +314,8 @@ export const translations = {
         status: 'Status',
         cancelOrder: 'Cancel order',
         markDelivered: 'Mark delivered',
-        save: 'Save'
+        save: 'Save',
+        openWhatsApp: 'WhatsApp'
       }
     }
   },
@@ -284,7 +328,22 @@ export const translations = {
       themeLight: 'Mode Clair',
       themeDark: 'Mode Sombre',
       cart: 'Panier',
-      menu: 'Menu'
+      menu: 'Menu',
+      lang: 'Changer de langue',
+    },
+    common: {
+      loading: 'Chargement',
+      retry: 'Réessayer',
+      close: 'Fermer',
+      decreaseQty: 'Diminuer la quantité',
+      increaseQty: 'Augmenter la quantité',
+      removeItem: 'Retirer l\'article',
+      edit: 'Modifier',
+      delete: 'Supprimer',
+      imageUnavailable: 'Image indisponible',
+      previousImage: 'Image précédente',
+      nextImage: 'Image suivante',
+      thumbnail: 'Miniature',
     },
     footer: {
       description: 'Parfums, montres et accessoires — choisis avec soin pour un luxe plus discret.',
@@ -318,6 +377,7 @@ export const translations = {
       newArrivalsSub: 'RÉCEMMENT AJOUTÉS',
       viewAll: 'Voir tout',
       addedToBag: 'Ajouté à votre panier',
+      loadError: 'Impossible de charger la collection.',
       heroPrev: 'Diapositive précédente',
       heroNext: 'Diapositive suivante',
       heroDots: 'Diapositives hero',
@@ -355,7 +415,12 @@ export const translations = {
       color: 'Couleur',
       quantity: 'Quantité',
       total: 'Total',
-      assurance: 'Communication sécurisée et vérifiée.'
+      assurance: 'Communication sécurisée et vérifiée.',
+      packaging: 'Emballage signature',
+      notFound: 'Cette pièce n\'est plus disponible.',
+      relatedTitle: 'Vous aimerez aussi',
+      relatedSub: 'ASSOCIÉS',
+      backToShop: 'Retour au catalogue',
     },
     shop: {
       title: 'Notre Collection',
@@ -363,6 +428,7 @@ export const translations = {
       search: 'Rechercher des pièces...',
       categoryAll: 'Toutes les pièces',
       sortLabel: 'Trier par:',
+      loadError: 'Impossible de charger le catalogue.',
       sortOptions: {
         ranking: 'Recommandés',
         trending: 'Tendances',
@@ -391,6 +457,9 @@ export const translations = {
       continue: 'Continuer vos achats',
       emptyText: 'Votre sélection attend quelque chose d\'exceptionnel.',
       emptyBtn: 'Explorer la collection',
+      ordering: 'Réservation de votre commande…',
+      openingWhatsApp: 'Commande réservée. Ouverture de WhatsApp…',
+      orderError: 'Impossible de réserver votre commande. Veuillez réessayer.',
       whatsappMessage: (orderNumber: string, lines: string, total: string) => `Bonjour,\n\nJe souhaite passer la commande suivante (${orderNumber}) :\n\n${lines}\n\nTotal : ${total}\n\nJ'aimerais plus d'informations concernant la livraison.\n\nMerci.`
     },
     admin: {
@@ -476,6 +545,22 @@ export const translations = {
         available: 'disponible'
       },
       confirmDelete: 'Supprimer ce produit ?',
+      productsLoadError: 'Impossible de charger les produits.',
+      productSaved: 'Produit enregistré avec succès.',
+      productDeleted: 'Produit supprimé.',
+      productSaveError: 'Impossible d\'enregistrer le produit.',
+      uploadError: 'Échec du téléversement. Veuillez réessayer.',
+      uploadProgress: 'Téléversement des images…',
+      validationName: 'Le nom du produit est requis.',
+      validationShort: 'La description courte est requise.',
+      validationDesc: 'La description est requise.',
+      validationPrice: 'Entrez un prix valide.',
+      validationCategory: 'Sélectionnez une catégorie.',
+      validationStock: 'La quantité doit être 0 ou plus.',
+      priorityPlaceholder: 'ex. 1 = en tête',
+      colorsPlaceholder: 'Noir, Or',
+      modelsPlaceholder: 'Petit, Grand',
+      removeImage: 'Retirer l\'image',
       
       ordersTitle: 'Commandes',
       clientOrdersEyebrow: 'COMMANDES CLIENTS',
@@ -530,7 +615,9 @@ export const translations = {
         activeCheck: '✅ Disponible à la vente',
         cancel: 'Annuler',
         save: 'Enregistrer le produit',
-        errorImage: 'Téléchargez au moins une image.'
+        saving: 'Enregistrement…',
+        errorImage: 'Téléchargez au moins une image.',
+        photosHint: 'Ajoutez des photos nettes. La première image est la couverture.'
       },
       
       drawer: {
@@ -547,7 +634,8 @@ export const translations = {
         status: 'Statut',
         cancelOrder: 'Annuler la commande',
         markDelivered: 'Marquer comme livrée',
-        save: 'Enregistrer'
+        save: 'Enregistrer',
+        openWhatsApp: 'WhatsApp'
       }
     }
   }
