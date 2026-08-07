@@ -15,6 +15,10 @@ export const translations = {
       shopTitle: 'Shop',
       viewCatalog: 'View catalog',
       contactTitle: 'Contact',
+      whatsapp: 'WhatsApp',
+      instagram: 'Instagram',
+      tiktok: 'TikTok',
+      email: 'E-mail',
       copyright: '© 2025 Ken\'s Shop. All rights reserved.'
     },
     home: {
@@ -25,6 +29,7 @@ export const translations = {
       personalService: 'PERSONAL SERVICE',
       questionsTitle: 'Questions? Message us.',
       questionsDesc: 'We confirm availability, delivery and payment with you directly.',
+      contactWhatsApp: 'WhatsApp',
       categoriesTitle: 'The Collection',
       categoriesSub: 'CATEGORIES',
       featuredTitle: 'Featured Collection',
@@ -36,7 +41,30 @@ export const translations = {
       newArrivalsTitle: 'New Arrivals',
       newArrivalsSub: 'RECENTLY ADDED',
       viewAll: 'View all',
-      addedToBag: 'Added to your bag'
+      addedToBag: 'Added to your bag',
+      heroPrev: 'Previous slide',
+      heroNext: 'Next slide',
+      heroDots: 'Hero slides',
+      heroSlideLabel: 'Slide',
+      heroEmptyTitle: 'The collection awaits.',
+      heroEmptySub: 'New pieces are being prepared. Explore the catalog in the meantime.',
+      heroDefaults: {
+        '1': {
+          title: 'Quiet luxury.',
+          subtitle: 'A considered collection of perfumes, watches and accessories.',
+          cta: 'Explore the collection',
+        },
+        '2': {
+          title: 'Time, refined.',
+          subtitle: 'Exceptional watches selected for presence and precision.',
+          cta: 'View watches',
+        },
+        '3': {
+          title: 'Scent & presence.',
+          subtitle: 'Signature fragrances for evenings that linger.',
+          cta: 'Discover perfumes',
+        },
+      },
     },
     product: {
       inStock: 'In Stock',
@@ -121,6 +149,8 @@ export const translations = {
       heroDisabled: 'Disabled',
       heroEnable: 'Enable',
       heroDisable: 'Disable',
+      heroMoveUp: 'Move up',
+      heroMoveDown: 'Move down',
       heroTitleField: 'Title (optional)',
       heroSubtitle: 'Subtitle (optional)',
       heroCtaLabel: 'Button label',
@@ -129,6 +159,8 @@ export const translations = {
       heroChooseImage: 'Choose image',
       heroImageRequired: 'Please upload a background image.',
       heroConfirmDelete: 'Delete this hero slide?',
+      heroCancel: 'Cancel',
+      heroAlt: 'Hero',
       stats: {
         totalProducts: 'Total Products',
         available: 'In Stock',
@@ -259,6 +291,10 @@ export const translations = {
       shopTitle: 'Boutique',
       viewCatalog: 'Voir le catalogue',
       contactTitle: 'Contact',
+      whatsapp: 'WhatsApp',
+      instagram: 'Instagram',
+      tiktok: 'TikTok',
+      email: 'E-mail',
       copyright: '© 2025 Ken\'s Shop. Tous droits réservés.'
     },
     home: {
@@ -269,6 +305,7 @@ export const translations = {
       personalService: 'SERVICE PERSONNALISÉ',
       questionsTitle: 'Des questions ? Écrivez-nous.',
       questionsDesc: 'Nous confirmons la disponibilité, la livraison et le paiement directement avec vous.',
+      contactWhatsApp: 'WhatsApp',
       categoriesTitle: 'La Collection',
       categoriesSub: 'CATÉGORIES',
       featuredTitle: 'Sélection Vedette',
@@ -280,7 +317,30 @@ export const translations = {
       newArrivalsTitle: 'Nouveautés',
       newArrivalsSub: 'RÉCEMMENT AJOUTÉS',
       viewAll: 'Voir tout',
-      addedToBag: 'Ajouté à votre panier'
+      addedToBag: 'Ajouté à votre panier',
+      heroPrev: 'Diapositive précédente',
+      heroNext: 'Diapositive suivante',
+      heroDots: 'Diapositives hero',
+      heroSlideLabel: 'Diapositive',
+      heroEmptyTitle: 'La collection se prépare.',
+      heroEmptySub: 'De nouvelles pièces arrivent bientôt. Explorez le catalogue en attendant.',
+      heroDefaults: {
+        '1': {
+          title: 'Le luxe discret.',
+          subtitle: 'Une sélection considérée de parfums, montres et accessoires.',
+          cta: 'Découvrir la collection',
+        },
+        '2': {
+          title: 'Le temps, raffiné.',
+          subtitle: 'Des montres d\'exception choisies pour leur présence et leur précision.',
+          cta: 'Voir les montres',
+        },
+        '3': {
+          title: 'Parfum & présence.',
+          subtitle: 'Des fragrances signature pour les soirées qui restent.',
+          cta: 'Découvrir les parfums',
+        },
+      },
     },
     product: {
       inStock: 'En Stock',
@@ -343,7 +403,7 @@ export const translations = {
       invalidLogin: 'E-mail ou mot de passe invalide.',
       navDashboard: 'Tableau de bord',
       navProducts: 'Produits',
-      navHero: 'Hero',
+      navHero: 'Bannière',
       navOrders: 'Commandes',
       signOut: 'Se déconnecter',
       shopManager: 'Gestionnaire',
@@ -365,6 +425,8 @@ export const translations = {
       heroDisabled: 'Désactivée',
       heroEnable: 'Activer',
       heroDisable: 'Désactiver',
+      heroMoveUp: 'Monter',
+      heroMoveDown: 'Descendre',
       heroTitleField: 'Titre (optionnel)',
       heroSubtitle: 'Sous-titre (optionnel)',
       heroCtaLabel: 'Texte du bouton',
@@ -373,6 +435,8 @@ export const translations = {
       heroChooseImage: 'Choisir une image',
       heroImageRequired: 'Veuillez téléverser une image de fond.',
       heroConfirmDelete: 'Supprimer cette diapositive ?',
+      heroCancel: 'Annuler',
+      heroAlt: 'Hero',
       stats: {
         totalProducts: 'Produits Totaux',
         available: 'En Stock',

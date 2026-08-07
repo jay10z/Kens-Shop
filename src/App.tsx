@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, X } from 'lucide-react';
-import { BRAND, SOCIAL, whatsappUrl, DEFAULT_HERO_SLIDES } from './lib/brand';
+import { BRAND, SOCIAL, whatsappUrl, isExternalHref, categoryImageUrl, DEFAULT_HERO_ASSETS } from './lib/brand';
 
 // ── Theme ──────────────────────────────────────────────
 function useTheme() {
@@ -50,21 +50,33 @@ function InventoryBadge({p}:{p:Product}){
 }
 function Toast({text,onClose}:{text:string;onClose:()=>void}){useEffect(()=>{const t=setTimeout(onClose,2600);return()=>clearTimeout(t)},[onClose]);return <motion.div initial={{y:20,opacity:0}} animate={{y:0,opacity:1}} exit={{y:20,opacity:0}} className="toast"><Check size={16}/>{text}</motion.div>}
 function BrandMark({className='',to='/'}:{className?:string;to?:string}){
-  return <Link to={to} className={`brand ${className}`} aria-label={BRAND.fullName}>
-    <span className="brand-main">{BRAND.name}</span>
-    <span className="brand-accent">{BRAND.nameAccent}</span>
-    {BRAND.slogan?<span className="brand-slogan">{BRAND.slogan}</span>:null}
+  const slogan=(BRAND.slogan||'').trim();
+  return <Link to={to} className={`brand ${className}${slogan?' has-slogan':''}`} aria-label={BRAND.fullName}>
+    <span className="brand-line">
+      <span className="brand-main">{BRAND.name}</span>
+      <span className="brand-accent">{BRAND.nameAccent}</span>
+    </span>
+    {slogan?<span className="brand-slogan">{slogan}</span>:null}
   </Link>;
 }
 function TikTokIcon({size=18}:{size?:number}){
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.15 15.2a6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.73a8.19 8.19 0 0 0 4.76 1.52V6.84a4.84 4.84 0 0 1-1-.15z"/></svg>;
 }
 function SocialLinks({className=''}:{className?:string}){
+  const {t}=useI18n();
   return <div className={`social-links ${className}`}>
-    <a href={whatsappUrl()} target="_blank" rel="noreferrer" aria-label="WhatsApp"><MessageCircle size={18}/></a>
-    <a href={SOCIAL.instagramUrl} target="_blank" rel="noreferrer" aria-label="Instagram"><Instagram size={18}/></a>
-    <a href={SOCIAL.tiktokUrl} target="_blank" rel="noreferrer" aria-label="TikTok"><TikTokIcon/></a>
+    <a href={whatsappUrl()} target="_blank" rel="noopener noreferrer" aria-label={t('footer.whatsapp')}><MessageCircle size={18}/></a>
+    <a href={SOCIAL.instagramUrl} target="_blank" rel="noopener noreferrer" aria-label={t('footer.instagram')}><Instagram size={18}/></a>
+    <a href={SOCIAL.tiktokUrl} target="_blank" rel="noopener noreferrer" aria-label={t('footer.tiktok')}><TikTokIcon/></a>
   </div>;
+}
+function SmartLink({to,className,children}:{to:string;className?:string;children:React.ReactNode}){
+  const href=to||'/shop';
+  if(isExternalHref(href)){
+    const url=/^wa\.me\//i.test(href)?`https://${href}`:href;
+    return <a className={className} href={url} target="_blank" rel="noopener noreferrer">{children}</a>;
+  }
+  return <Link className={className} to={href}>{children}</Link>;
 }
 function Header(){
   const {count}=useCart();
@@ -102,35 +114,72 @@ function Footer(){
     </div>
     <div>
       <b>{t('footer.contactTitle')}</b>
-      <a href={whatsappUrl()} target="_blank" rel="noreferrer">WhatsApp</a>
-      <a href={SOCIAL.instagramUrl} target="_blank" rel="noreferrer">Instagram</a>
-      <a href={SOCIAL.tiktokUrl} target="_blank" rel="noreferrer">TikTok</a>
-      <a href={`mailto:${SOCIAL.email}`}>E-mail</a>
+      <a href={whatsappUrl()} target="_blank" rel="noopener noreferrer">{t('footer.whatsapp')}</a>
+      <a href={SOCIAL.instagramUrl} target="_blank" rel="noopener noreferrer">{t('footer.instagram')}</a>
+      <a href={SOCIAL.tiktokUrl} target="_blank" rel="noopener noreferrer">{t('footer.tiktok')}</a>
+      <a href={`mailto:${SOCIAL.email}`}>{t('footer.email')}</a>
     </div>
     <small>{t('footer.copyright')}</small>
   </footer>;
 }
 function Layout({children}:{children:React.ReactNode}){
-  return <><Header/><main>{children}</main><Footer/><a className="float-wa" href={whatsappUrl()} target="_blank" rel="noreferrer" aria-label="WhatsApp"><MessageCircle/></a></>;
+  const {t}=useI18n();
+  return <><Header/><main>{children}</main><Footer/><a className="float-wa" href={whatsappUrl()} target="_blank" rel="noopener noreferrer" aria-label={t('footer.whatsapp')}><MessageCircle/></a></>;
+}
+function buildDefaultHeroSlides(t:(key:string)=>any){
+  return DEFAULT_HERO_ASSETS.map(asset=>({
+    ...asset,
+    title:t(`home.heroDefaults.${asset.key}.title`),
+    subtitle:t(`home.heroDefaults.${asset.key}.subtitle`),
+    cta_label:t(`home.heroDefaults.${asset.key}.cta`),
+  }));
 }
 function HeroSlider(){
-  const [slides,setSlides]=useState<any[]>(DEFAULT_HERO_SLIDES);
+  const [slides,setSlides]=useState<any[]>([]);
+  const [mode,setMode]=useState<'loading'|'ready'|'fallback'|'empty'>('loading');
   const [index,setIndex]=useState(0);
   const [paused,setPaused]=useState(false);
   const touchX=useRef<number|null>(null);
-  const {t}=useI18n();
+  const {t,lang}=useI18n();
 
   useEffect(()=>{
+    let cancelled=false;
     api('/api/hero').then((data)=>{
-      if(Array.isArray(data)&&data.length)setSlides(data);
-    }).catch(()=>{});
+      if(cancelled)return;
+      if(Array.isArray(data)){
+        if(data.length){setSlides(data);setIndex(0);setMode('ready');}
+        else{setSlides([]);setMode('empty');}
+      }
+    }).catch(()=>{
+      if(cancelled)return;
+      setSlides(buildDefaultHeroSlides(t));
+      setIndex(0);
+      setMode('fallback');
+    });
+    return()=>{cancelled=true};
   },[]);
 
   useEffect(()=>{
-    if(paused||slides.length<=1)return;
+    if(mode==='fallback')setSlides(buildDefaultHeroSlides(t));
+  },[lang,mode,t]);
+
+  useEffect(()=>{
+    if(paused||slides.length<=1||mode==='empty'||mode==='loading')return;
     const id=setInterval(()=>setIndex(i=>(i+1)%slides.length),5500);
-    return ()=>clearInterval(id);
-  },[paused,slides.length]);
+    return()=>clearInterval(id);
+  },[paused,slides.length,mode]);
+
+  if(mode==='loading')return <section className="hero hero-slider hero-loading" aria-hidden="true"/>;
+  if(mode==='empty'){
+    return <section className="hero hero-slider hero-empty">
+      <div className="hero-content">
+        <p className="eyebrow gold">{BRAND.fullName}</p>
+        <h1>{t('home.heroEmptyTitle')}</h1>
+        <p className="hero-sub">{t('home.heroEmptySub')}</p>
+        <Link className="btn gold-btn" to="/shop">{t('home.exploreBtn')} <ArrowRight/></Link>
+      </div>
+    </section>;
+  }
 
   const go=(dir:number)=>setIndex(i=>(i+dir+slides.length)%slides.length);
   const slide=slides[index]||slides[0];
@@ -169,16 +218,16 @@ function HeroSlider(){
         {slide.subtitle?<motion.p key={`s-${slide.id||index}`} className="hero-sub" initial={{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{delay:0.25}}>{slide.subtitle}</motion.p>:null}
         {(slide.cta_label||slide.cta_href)?(
           <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.35}}>
-            <Link className="btn gold-btn" to={slide.cta_href||'/shop'}>{slide.cta_label||t('home.exploreBtn')} <ArrowRight/></Link>
+            <SmartLink className="btn gold-btn" to={slide.cta_href||'/shop'}>{slide.cta_label||t('home.exploreBtn')} <ArrowRight/></SmartLink>
           </motion.div>
         ):null}
       </div>
       {slides.length>1&&<>
-        <button className="hero-nav prev" onClick={()=>go(-1)} aria-label="Previous slide"><ChevronLeft/></button>
-        <button className="hero-nav next" onClick={()=>go(1)} aria-label="Next slide"><ChevronRight/></button>
-        <div className="hero-dots" role="tablist" aria-label="Hero slides">
+        <button className="hero-nav prev" onClick={()=>go(-1)} aria-label={t('home.heroPrev')}><ChevronLeft/></button>
+        <button className="hero-nav next" onClick={()=>go(1)} aria-label={t('home.heroNext')}><ChevronRight/></button>
+        <div className="hero-dots" role="tablist" aria-label={t('home.heroDots')}>
           {slides.map((s:any,i:number)=>(
-            <button key={s.id||i} className={i===index?'active':''} onClick={()=>setIndex(i)} aria-label={`Slide ${i+1}`}/>
+            <button key={s.id||i} className={i===index?'active':''} onClick={()=>setIndex(i)} aria-label={`${t('home.heroSlideLabel')} ${i+1}`}/>
           ))}
         </div>
       </>}
@@ -188,11 +237,6 @@ function HeroSlider(){
 function CategoryStrip({cats}:{cats:any[]}){
   const {t}=useI18n();
   if(!cats.length)return null;
-  const images:Record<string,string>={
-    Perfumes:'https://images.unsplash.com/photo-1594035910387-fea47794261f?auto=format&fit=crop&w=900&q=80',
-    Watches:'https://images.unsplash.com/photo-1524592094714-0f0654e20314?auto=format&fit=crop&w=900&q=80',
-    Accessories:'https://images.unsplash.com/photo-1627123424574-724758594e93?auto=format&fit=crop&w=900&q=80',
-  };
   return <section className="category-strip">
     <div className="section-head">
       <div>
@@ -204,7 +248,7 @@ function CategoryStrip({cats}:{cats:any[]}){
     <div className="category-grid">
       {cats.map(c=>(
         <Link key={c.id} to={`/shop?category=${c.id}`} className="category-card">
-          <img src={images[c.name]||images.Accessories} alt={c.name} loading="lazy"/>
+          <img src={categoryImageUrl(c)} alt={c.name} loading="lazy"/>
           <div>
             <span className="eyebrow gold">{BRAND.nameAccent}</span>
             <h3>{c.name}</h3>
@@ -274,7 +318,7 @@ function Home(){
           <p>{t('home.questionsDesc')}</p>
           <SocialLinks className="contact-social"/>
         </div>
-        <a href={whatsappUrl()} className="btn gold-btn" target="_blank" rel="noreferrer"><MessageCircle/> WhatsApp</a>
+        <a href={whatsappUrl()} className="btn gold-btn" target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('home.contactWhatsApp')}</a>
       </section>
     </>}
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
@@ -595,9 +639,17 @@ function AdminHero(){
     load();
   };
 
-  const move=async(slide:any,delta:number)=>{
-    await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({id:slide.id,display_order:Math.max(0,(Number(slide.display_order)||0)+delta)})});
-    load();
+  const move=async(index:number,delta:number)=>{
+    const target=index+delta;
+    if(target<0||target>=slides.length)return;
+    const next=[...slides];
+    [next[index],next[target]]=[next[target],next[index]];
+    setSlides(next.map((s,i)=>({...s,display_order:i+1})));
+    try{
+      const updated=await api('/api/hero',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({orderedIds:next.map(s=>s.id)})});
+      if(Array.isArray(updated))setSlides(updated);
+      else load();
+    }catch{load()}
   };
 
   const toggle=async(slide:any)=>{
@@ -612,17 +664,17 @@ function AdminHero(){
     </div>
     <p className="fine" style={{marginTop:'-1rem',marginBottom:'1.5rem'}}>{t('admin.heroHelp')}</p>
     <div className="hero-admin-list">
-      {slides.map(s=>(
+      {slides.map((s,i)=>(
         <article key={s.id} className={`hero-admin-card ${s.enabled?'':'disabled'}`}>
-          <img src={s.image_url} alt={s.title||'Hero'}/>
+          <img src={s.image_url} alt={s.title||t('admin.heroAlt')}/>
           <div>
             <b>{s.title||t('admin.heroUntitled')}</b>
             <span>{t('admin.heroOrder')}: {s.display_order} · {s.enabled?t('admin.heroEnabled'):t('admin.heroDisabled')}</span>
             <small>{s.subtitle}</small>
           </div>
           <div className="hero-admin-actions">
-            <button type="button" onClick={()=>move(s,-1)} aria-label="Move up"><ChevronLeft/></button>
-            <button type="button" onClick={()=>move(s,1)} aria-label="Move down"><ChevronRight/></button>
+            <button type="button" onClick={()=>move(i,-1)} aria-label={t('admin.heroMoveUp')} disabled={i===0}><ChevronLeft/></button>
+            <button type="button" onClick={()=>move(i,1)} aria-label={t('admin.heroMoveDown')} disabled={i===slides.length-1}><ChevronRight/></button>
             <button type="button" onClick={()=>toggle(s)}>{s.enabled?t('admin.heroDisable'):t('admin.heroEnable')}</button>
             <button type="button" onClick={()=>setEditing(s)}><Pencil/></button>
             <button type="button" onClick={()=>remove(s.id)}><Trash2/></button>
@@ -638,13 +690,13 @@ function AdminHero(){
         <label className="full">{t('admin.heroSubtitle')}<textarea value={editing.subtitle||''} onChange={e=>setEditing({...editing,subtitle:e.target.value})}/></label>
         <label>{t('admin.heroCtaLabel')}<input value={editing.cta_label||''} onChange={e=>setEditing({...editing,cta_label:e.target.value})}/></label>
         <label>{t('admin.heroCtaHref')}<input value={editing.cta_href||'/shop'} onChange={e=>setEditing({...editing,cta_href:e.target.value})}/></label>
-        <label>{t('admin.heroOrder')}<input type="number" min="0" value={editing.display_order??0} onChange={e=>setEditing({...editing,display_order:e.target.value})}/></label>
+        <label>{t('admin.heroOrder')}<input type="number" min="1" value={editing.display_order??1} onChange={e=>setEditing({...editing,display_order:e.target.value})}/></label>
         <label className="checks"><input type="checkbox" checked={!!editing.enabled} onChange={e=>setEditing({...editing,enabled:e.target.checked})}/> {t('admin.heroEnabled')}</label>
         <label className="full upload">{t('admin.heroImage')}<input type="file" accept="image/*" onChange={e=>upload(e.target.files)}/><span><Plus/> {busy?t('admin.modal.uploading'):t('admin.heroChooseImage')}</span></label>
         {editing.image_url?<div className="image-preview full"><div><img src={editing.image_url}/></div></div>:null}
       </div>
       {error&&<p className="error">{error}</p>}
-      <div className="modal-actions"><button type="button" onClick={()=>setEditing(null)}>Cancel</button><button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
+      <div className="modal-actions"><button type="button" onClick={()=>setEditing(null)}>{t('admin.heroCancel')}</button><button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
     </form></div>}
   </section></AdminShell>;
 }
