@@ -54,7 +54,11 @@ async function api(path:string, options?:RequestInit){
     const text=await r.text();
     let d:any=null;
     try{d=text?JSON.parse(text):null}catch{throw new Error(r.ok?'Invalid server response':'Something went wrong')}
-    if(!r.ok)throw new Error(d?.error||'Something went wrong');
+    if(!r.ok){
+      const err:any=new Error(d?.error||'Something went wrong');
+      if(d?.code)err.code=d.code;
+      throw err;
+    }
     return d;
   }catch(e:any){
     if(e?.name==='AbortError')throw new Error('Request timed out. Please try again.');
@@ -354,21 +358,16 @@ function Home(){
       .finally(()=>setLoading(false));
   };
   useEffect(()=>{load()},[]);
-  const inStock=(p:Product)=>(p.stock_quantity??0)>0;
-  const featuredRaw=products.filter(p=>p.featured);
-  const featured=featuredRaw.length?featuredRaw:products.filter(inStock).slice(0,4);
-  const trendingRaw=[...products]
+  const featured=products.filter(p=>!!p.featured);
+  const trending=[...products]
     .filter(p=>(p.trendingScore||0)>0)
     .sort((a,b)=>b.trendingScore-a.trendingScore||(b.purchase_count||0)-(a.purchase_count||0))
     .slice(0,4);
-  const trending=trendingRaw.length?trendingRaw:[...products].filter(inStock).sort((a,b)=>Number(b.price)-Number(a.price)).slice(0,4);
-  const bestRaw=[...products]
+  const bestSellers=[...products]
     .filter(p=>(p.purchase_count||0)>0)
     .sort((a,b)=>(b.purchase_count||0)-(a.purchase_count||0)||(b.trendingScore||0)-(a.trendingScore||0))
     .slice(0,4);
-  const bestSellers=bestRaw.length?bestRaw:[...products].filter(inStock).slice(0,4);
-  const arrivalsRaw=products.filter(p=>p.isNewArrival).slice(0,4);
-  const arrivals=arrivalsRaw.length?arrivalsRaw:[...products].slice(0,4);
+  const arrivals=products.filter(p=>p.isNewArrival).slice(0,4);
   
   return <Layout>
     <HeroSlider/>
@@ -625,7 +624,11 @@ function AdminDashboard(){
           setWarnings(d.warnings);
           if(import.meta.env.DEV)console.warn('[dashboard warnings]',d.warnings);
         }
-        if(d?.error)setError(d.error);
+        if(d?.error){
+          // Keep owner-facing copy localized; log technical detail in DEV only
+          if(import.meta.env.DEV)console.warn('[dashboard error]',d.error,d.warnings);
+          setError(/partial|Some dashboard data/i.test(String(d.error))?t('admin.dashboardPartial'):t('admin.dashboardLoadError'));
+        }
       })
       .catch((e:any)=>{
         if(import.meta.env.DEV)console.error('[dashboard]',e);
@@ -651,20 +654,39 @@ function AdminDashboard(){
     [t('admin.stats.revenue'),money(d.revenue||0),Sparkles],
   ];
   const widgets=[
-    {icon:'🔥',label:t('admin.widgets.trending'),product:d.trendingProduct},
-    {icon:'🏆',label:t('admin.widgets.bestSeller'),product:d.bestSeller},
-    {icon:'👀',label:t('admin.widgets.mostViewed'),product:d.mostViewed},
-    {icon:'🛒',label:t('admin.widgets.mostCart'),product:d.mostCart},
-    {icon:'💰',label:t('admin.widgets.highestRevenue'),product:d.highestRevenue},
+    {label:t('admin.widgets.trending'),product:d.trendingProduct},
+    {label:t('admin.widgets.bestSeller'),product:d.bestSeller},
+    {label:t('admin.widgets.mostViewed'),product:d.mostViewed},
+    {label:t('admin.widgets.mostCart'),product:d.mostCart},
+    {label:t('admin.widgets.highestRevenue'),product:d.highestRevenue},
   ];
   const runningLow=d.runningLow||[];
+  const insights=Array.isArray(d.insights)?d.insights:[];
+  const insightLabel=(type:string)=>{
+    if(type==='high_views_low_purchases')return t('admin.insights.highViewsLowPurchases');
+    if(type==='high_carts_low_purchases')return t('admin.insights.highCartsLowPurchases');
+    if(type==='low_views_high_purchases')return t('admin.insights.lowViewsHighPurchases');
+    if(type==='high_purchases_low_stock')return t('admin.insights.highPurchasesLowStock');
+    return type;
+  };
   return <AdminShell><section className="admin-content">
     <div className="admin-title"><div><p className="eyebrow gold">{t('admin.dashboardEyebrow')}</p><h1>{t('admin.dashboardTitle')}</h1></div><Link to="/admin/products" className="btn gold-btn"><Plus/> {t('admin.addProduct')}</Link></div>
     {error&&<p className="error" role="alert" style={{marginBottom:'1.25rem'}}>{error} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
     {!error&&warnings.length>0&&<p className="fine" role="status" style={{marginBottom:'1.25rem',color:'var(--fg-muted)'}}>{t('admin.dashboardPartial')} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
     <div className="stat-grid simple-stats">{cards.map(([n,v,I]:any)=><article key={n}><I/><span>{n}</span><strong>{v}</strong></article>)}</div>
     <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.analyticsEyebrow')}</p><h2>{t('admin.analyticsTitle')}</h2></div></div>
-    <div className="stat-grid simple-stats">{widgets.map(w=><article key={w.label}><span style={{fontSize:'1.5rem'}}>{w.icon}</span><span>{w.label}</span><strong style={{fontSize:'0.85rem',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{w.product?.name||'—'}</strong></article>)}</div>
+    <div className="stat-grid simple-stats">{widgets.map(w=><article key={w.label}><span>{w.label}</span><strong style={{fontSize:'0.85rem',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{w.product?.name||'—'}</strong></article>)}</div>
+    {insights.length>0&&<>
+      <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.insightsEyebrow')}</p><h2>{t('admin.insightsTitle')}</h2></div></div>
+      <div className="insight-list">
+        {insights.map((ins:any,i:number)=>(
+          <article key={`${ins.type}-${ins.productId}-${i}`} className="insight-card">
+            <b>{insightLabel(ins.type)}</b>
+            <span>{ins.productName}</span>
+          </article>
+        ))}
+      </div>
+    </>}
     <div className="admin-panels">
       <article>
         <div className="panel-head"><p className="eyebrow">{t('admin.runningLow')}</p><Link to="/admin/products">{t('admin.navProducts')}</Link></div>
@@ -742,42 +764,77 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     low_stock_threshold:item.low_stock_threshold??5,
     colors:toCsv(item.colors),
     models:toCsv(item.models),
-    images:item.images||[],
-    featured:item.featured||false,
-    hidden:item.hidden||false,
+    images:Array.isArray(item.images)?[...item.images]:[],
+    featured:!!item.featured,
+    hidden:!!item.hidden,
     active:item.active??true,
     display_priority:item.display_priority??'',
   });
   const [saving,setSaving]=useState(false);
   const [uploading,setUploading]=useState(false);
+  const [uploadNote,setUploadNote]=useState('');
+  const [showAdvanced,setShowAdvanced]=useState(false);
   const busy=saving||uploading;
   const set=(k:string,v:any)=>setForm(x=>({...x,[k]:v}));
-  const parseList=(raw:string)=>raw.split(',').map((x:string)=>x.trim()).filter(Boolean);
+  const parseList=(raw:string)=>String(raw||'').split(',').map((x:string)=>x.trim()).filter(Boolean);
+
+  const friendlySaveError=(err:any)=>{
+    const code=err?.code||'';
+    const m=String(err?.message||err||'');
+    if(code==='SCHEMA_OPTIONS'||/options could not be saved|colors|models|schema cache|missing products\./i.test(m))return t('admin.productOptionsSaveError');
+    if(code==='SCHEMA_VISIBILITY'||/visibility settings|featured|hidden/i.test(m))return t('admin.productVisibilitySaveError');
+    if(code==='SCHEMA_PRODUCT'||/product details could not/i.test(m))return t('admin.productSaveError');
+    if(/timed out/i.test(m))return t('admin.productSaveTimeout');
+    if(/unauthorized/i.test(m))return t('admin.dashboardAuthError');
+    if(/migration|Database is missing/i.test(m))return t('admin.productOptionsSaveError');
+    if(/could not be saved|something went wrong|invalid server|failed/i.test(m))return t('admin.productSaveError');
+    // Never surface raw PostgREST/schema text to the owner
+    if(/postgrest|postgres|column|schema cache|PGRST/i.test(m))return t('admin.productSaveError');
+    return t('admin.productSaveError');
+  };
+
   const validate=()=>{
     if(!form.name.trim())return t('admin.validationName');
-    if(!form.short_description.trim())return t('admin.validationShort');
-    if(!form.description.trim())return t('admin.validationDesc');
-    if(form.price===''||Number(form.price)<0||Number.isNaN(Number(form.price)))return t('admin.validationPrice');
     if(!form.category_id)return t('admin.validationCategory');
+    if(form.price===''||Number(form.price)<0||Number.isNaN(Number(form.price)))return t('admin.validationPrice');
     if(form.stock_quantity===''||Number(form.stock_quantity)<0||Number.isNaN(Number(form.stock_quantity)))return t('admin.validationStock');
+    if(form.low_stock_threshold!==''&&(Number(form.low_stock_threshold)<0||Number.isNaN(Number(form.low_stock_threshold))))return t('admin.validationLowStock');
+    if(form.display_priority!==''&&(Number(form.display_priority)<1||Number.isNaN(Number(form.display_priority))))return t('admin.validationPriority');
     if(!form.images.length)return t('admin.modal.errorImage');
     return '';
   };
+
+  const moveImage=(from:number,to:number)=>{
+    if(to<0||to>=form.images.length)return;
+    setForm(x=>{
+      const next=[...x.images];
+      const [img]=next.splice(from,1);
+      next.splice(to,0,img);
+      return {...x,images:next};
+    });
+  };
+
   const upload=async(files:FileList|null)=>{
     if(!files?.length||busy)return;
-    setUploading(true);setError('');
+    setUploading(true);setError('');setUploadNote(t('admin.uploadProgress'));
     try{
-      const urls=[];
+      const urls:string[]=[];
       for(const file of Array.from(files)){
         if(!file.type.startsWith('image/'))continue;
         const base64=await new Promise<string>((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve((r.result as string).split(',')[1]);r.onerror=()=>reject(new Error(t('admin.uploadError')));r.readAsDataURL(file)});
         const d=await api('/api/upload',{method:'POST',headers:authHeaders(token),body:JSON.stringify({fileName:`${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`,fileBase64:base64,contentType:file.type})});
-        urls.push(d.url);
+        if(d?.url)urls.push(d.url);
       }
       if(!urls.length)throw new Error(t('admin.uploadError'));
       setForm(x=>({...x,images:[...x.images,...urls]}));
-    }catch(e:any){setError(e.message||t('admin.uploadError'))}finally{setUploading(false)}
+      setUploadNote(t('admin.uploadSuccess'));
+    }catch(e:any){
+      console.error('[product upload]',e);
+      setUploadNote('');
+      setError(t('admin.uploadError'));
+    }finally{setUploading(false)}
   };
+
   const save=async(e:FormEvent)=>{
     e.preventDefault();
     if(busy)return;
@@ -785,23 +842,33 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     if(v){setError(v);return}
     setSaving(true);setError('');
     try{
+      const short=form.short_description.trim()||form.name.trim();
       await api('/api/products',{method:item.id?'PUT':'POST',headers:authHeaders(token),body:JSON.stringify({
-        ...form,id:item.id,
+        id:item.id,
         name:form.name.trim(),
-        short_description:form.short_description.trim(),
+        short_description:short,
         description:form.description.trim(),
         price:Number(form.price),
+        category_id:form.category_id,
         stock_quantity:Number(form.stock_quantity),
-        low_stock_threshold:Number(form.low_stock_threshold),
+        low_stock_threshold:form.low_stock_threshold===''?5:Number(form.low_stock_threshold),
         display_priority:form.display_priority===''?null:Number(form.display_priority),
         colors:parseList(form.colors),
         models:parseList(form.models),
+        images:form.images,
+        featured:!!form.featured,
+        hidden:!!form.hidden,
+        active:!!form.active,
       })});
       done();
-    }catch(e:any){setError(e.message||t('admin.productSaveError'))}finally{setSaving(false)}
+    }catch(e:any){
+      console.error('[product save]',e);
+      setError(friendlySaveError(e));
+    }finally{setSaving(false)}
   };
+
   return <div className="modal-bg" role="presentation" onClick={(e)=>{if(e.target===e.currentTarget&&!busy)close()}}>
-    <form className="modal" onSubmit={save} aria-busy={busy} noValidate>
+    <form className="modal product-modal" onSubmit={save} aria-busy={busy} noValidate>
       <div className="modal-head">
         <div>
           <p className="eyebrow gold">{item.id?t('admin.modal.editProduct'):t('admin.modal.newProduct')}</p>
@@ -809,38 +876,94 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
         </div>
         <button type="button" onClick={close} aria-label={t('common.close')} disabled={busy}><X/></button>
       </div>
-      <div className="form-grid">
-        <label className="full">{t('admin.modal.name')}<input value={form.name} onChange={e=>set('name',e.target.value)} required maxLength={120} autoFocus/></label>
-        <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} required maxLength={180}/></label>
-        <label className="full">{t('admin.modal.desc')}<textarea value={form.description} onChange={e=>set('description',e.target.value)} required rows={4}/></label>
-        <label>{t('admin.modal.price')}<input type="number" min="0" step="0.01" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
-        <label>{t('admin.modal.category')}<select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-        <label>{t('admin.modal.stockQty')}<input type="number" min="0" value={form.stock_quantity} onChange={e=>set('stock_quantity',e.target.value)} required/></label>
-        <label>{t('admin.modal.lowStockThresh')}<input type="number" min="0" value={form.low_stock_threshold} onChange={e=>set('low_stock_threshold',e.target.value)}/></label>
-        <label>{t('admin.modal.priority')}<input type="number" min="1" value={form.display_priority} onChange={e=>set('display_priority',e.target.value)} placeholder={t('admin.priorityPlaceholder')}/></label>
-        <label>{t('admin.modal.colors')}<input value={form.colors} onChange={e=>set('colors',e.target.value)} placeholder={t('admin.colorsPlaceholder')}/></label>
-        <label>{t('admin.modal.models')}<input value={form.models} onChange={e=>set('models',e.target.value)} placeholder={t('admin.modelsPlaceholder')}/></label>
-        <label className={`full upload ${uploading?'is-busy':''}`}>
-          {t('admin.modal.photos')}
-          <input type="file" accept="image/*" multiple disabled={busy} onChange={e=>{upload(e.target.files);e.target.value=''}}/>
-          <span><Plus/> {uploading?t('admin.uploadProgress'):t('admin.modal.choosePhotos')}</span>
-        </label>
-        <p className="fine full upload-hint">{t('admin.modal.photosHint')}</p>
-        <div className="image-preview full">
-          {form.images.map((im:string,i:number)=>(
-            <div key={`${im}-${i}`}>
-              <ProductImage src={im} alt=""/>
-              {i===0&&<em className="cover-tag">1</em>}
-              <button type="button" onClick={()=>set('images',form.images.filter((_:string,n:number)=>n!==i))} aria-label={t('admin.removeImage')} disabled={busy}><X/></button>
+
+      <div className="form-sections">
+        <section className="form-section">
+          <h3>{t('admin.modal.sectionInfo')}</h3>
+          <div className="form-grid">
+            <label className="full">{t('admin.modal.name')}<input value={form.name} onChange={e=>set('name',e.target.value)} required maxLength={120} autoFocus/></label>
+            <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} maxLength={180} placeholder={t('admin.modal.shortDescHint')}/></label>
+            <label className="full">{t('admin.modal.desc')}<textarea value={form.description} onChange={e=>set('description',e.target.value)} rows={3} placeholder={t('admin.modal.descHint')}/></label>
+            <label>{t('admin.modal.category')}<select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+            <label>{t('admin.modal.price')}<input type="number" min="0" step="0.01" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
+            <label>{t('admin.modal.stockQty')}<input type="number" min="0" value={form.stock_quantity} onChange={e=>set('stock_quantity',e.target.value)} required/></label>
+          </div>
+        </section>
+
+        <section className="form-section">
+          <h3>{t('admin.modal.sectionPhotos')}</h3>
+          <p className="fine">{t('admin.modal.photosHint')}</p>
+          <label className={`full upload ${uploading?'is-busy':''}`}>
+            {t('admin.modal.photos')}
+            <input type="file" accept="image/*" multiple disabled={busy} onChange={e=>{upload(e.target.files);e.target.value=''}}/>
+            <span><Plus/> {uploading?t('admin.uploadProgress'):t('admin.modal.choosePhotos')}</span>
+          </label>
+          {uploadNote&&<p className="fine upload-status" role="status">{uploadNote}</p>}
+          <div className="image-preview full">
+            {form.images.map((im:string,i:number)=>(
+              <div key={`${im}-${i}`} className="image-preview-item">
+                <ProductImage src={im} alt=""/>
+                {i===0?<em className="cover-tag">{t('admin.modal.coverBadge')}</em>:<em className="cover-tag muted">{i+1}</em>}
+                <div className="image-preview-actions">
+                  <button type="button" onClick={()=>moveImage(i,i-1)} disabled={busy||i===0} aria-label={t('admin.modal.moveImageLeft')}><ChevronLeft/></button>
+                  <button type="button" onClick={()=>moveImage(i,i+1)} disabled={busy||i===form.images.length-1} aria-label={t('admin.modal.moveImageRight')}><ChevronRight/></button>
+                  <button type="button" onClick={()=>set('images',form.images.filter((_:string,n:number)=>n!==i))} aria-label={t('admin.removeImage')} disabled={busy}><X/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {!form.images.length&&<p className="fine">{t('admin.modal.photosEmpty')}</p>}
+        </section>
+
+        <section className="form-section">
+          <h3>{t('admin.modal.sectionOptions')}</h3>
+          <div className="form-grid">
+            <label className="full">{t('admin.modal.colors')}<input value={form.colors} onChange={e=>set('colors',e.target.value)} placeholder={t('admin.colorsPlaceholder')}/></label>
+            <label className="full">{t('admin.modal.models')}<input value={form.models} onChange={e=>set('models',e.target.value)} placeholder={t('admin.modelsPlaceholder')}/></label>
+          </div>
+          <p className="fine">{t('admin.modal.optionsHint')}</p>
+        </section>
+
+        <section className="form-section">
+          <h3>{t('admin.modal.sectionVisibility')}</h3>
+          <div className="checks visibility-checks">
+            <label className="check-card featured-check">
+              <input type="checkbox" checked={form.featured} onChange={e=>set('featured',e.target.checked)}/>
+              <span>
+                <b>{t('admin.modal.featuredTitle')}</b>
+                <small>{t('admin.modal.featuredHelp')}</small>
+              </span>
+            </label>
+            <label className="check-card">
+              <input type="checkbox" checked={form.active} onChange={e=>set('active',e.target.checked)}/>
+              <span>
+                <b>{t('admin.modal.activeTitle')}</b>
+                <small>{t('admin.modal.activeHelp')}</small>
+              </span>
+            </label>
+            <label className="check-card">
+              <input type="checkbox" checked={form.hidden} onChange={e=>set('hidden',e.target.checked)}/>
+              <span>
+                <b>{t('admin.modal.hiddenTitle')}</b>
+                <small>{t('admin.modal.hiddenHelp')}</small>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="form-section advanced-section">
+          <button type="button" className="advanced-toggle" onClick={()=>setShowAdvanced(v=>!v)} aria-expanded={showAdvanced}>
+            {showAdvanced?t('admin.modal.hideAdvanced'):t('admin.modal.showAdvanced')}
+          </button>
+          {showAdvanced&&(
+            <div className="form-grid" style={{marginTop:12}}>
+              <label>{t('admin.modal.lowStockThresh')}<input type="number" min="0" value={form.low_stock_threshold} onChange={e=>set('low_stock_threshold',e.target.value)}/><small className="field-hint">{t('admin.modal.lowStockHelp')}</small></label>
+              <label>{t('admin.modal.priority')}<input type="number" min="1" value={form.display_priority} onChange={e=>set('display_priority',e.target.value)} placeholder={t('admin.priorityPlaceholder')}/><small className="field-hint">{t('admin.modal.priorityHelp')}</small></label>
             </div>
-          ))}
-        </div>
-        <div className="checks full">
-          <label><input type="checkbox" checked={form.featured} onChange={e=>set('featured',e.target.checked)}/> {t('admin.modal.featuredCheck')}</label>
-          <label><input type="checkbox" checked={form.hidden} onChange={e=>set('hidden',e.target.checked)}/> {t('admin.modal.hiddenCheck')}</label>
-          <label><input type="checkbox" checked={form.active} onChange={e=>set('active',e.target.checked)}/> {t('admin.modal.activeCheck')}</label>
-        </div>
+          )}
+        </section>
       </div>
+
       {error&&<p className="error" role="alert">{error}</p>}
       <div className="modal-actions">
         <button type="button" onClick={close} disabled={busy}>{t('admin.modal.cancel')}</button>

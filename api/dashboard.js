@@ -25,7 +25,53 @@ const emptyDashboard = {
   mostCart: null,
   highestRevenue: null,
   runningLow: [],
+  insights: [],
 };
+
+/** Business-friendly signals from existing product stats (no external analytics). */
+function buildBusinessInsights(products = []) {
+  const insights = [];
+  const pick = (list, type, limit = 3) =>
+    list.slice(0, limit).map((p) => ({
+      type,
+      productId: p.id,
+      productName: p.name,
+      views: p.view_count || 0,
+      carts: p.cart_count || 0,
+      purchases: p.purchase_count || 0,
+      stock: p.stock_quantity ?? 0,
+    }));
+
+  // Attracts attention but rarely sells
+  const attentionNoSale = [...products]
+    .filter((p) => (p.view_count || 0) >= 8 && (p.purchase_count || 0) === 0)
+    .sort((a, b) => (b.view_count || 0) - (a.view_count || 0));
+  insights.push(...pick(attentionNoSale, 'high_views_low_purchases'));
+
+  // Intent in cart but not converting
+  const cartNoSale = [...products]
+    .filter((p) => (p.cart_count || 0) >= 3 && (p.purchase_count || 0) === 0)
+    .sort((a, b) => (b.cart_count || 0) - (a.cart_count || 0));
+  insights.push(...pick(cartNoSale, 'high_carts_low_purchases'));
+
+  // Sells well with little visibility
+  const efficientSellers = [...products]
+    .filter((p) => (p.purchase_count || 0) >= 2 && (p.view_count || 0) > 0 && (p.view_count || 0) <= 10)
+    .sort((a, b) => (b.purchase_count || 0) - (a.purchase_count || 0));
+  insights.push(...pick(efficientSellers, 'low_views_high_purchases'));
+
+  // Popular and running low — restock soon
+  const restockSoon = [...products]
+    .filter(
+      (p) =>
+        (p.purchase_count || 0) >= 1 &&
+        (p.stockPriority === 2 || ((p.stock_quantity ?? 0) > 0 && (p.stock_quantity ?? 0) <= (p.low_stock_threshold ?? 5)))
+    )
+    .sort((a, b) => (a.stock_quantity ?? 0) - (b.stock_quantity ?? 0));
+  insights.push(...pick(restockSoon, 'high_purchases_low_stock'));
+
+  return insights.slice(0, 8);
+}
 
 const QUERY_TIMEOUT_MS = 10000;
 
@@ -156,6 +202,7 @@ export default async function handler(req, res) {
       mostCart,
       highestRevenue,
       runningLow: productsRunningLow(productsWithStats, 8),
+      insights: buildBusinessInsights(productsWithStats),
       warnings,
       ...(criticalFailure
         ? { error: 'Some dashboard data could not be loaded. Partial results shown.' }

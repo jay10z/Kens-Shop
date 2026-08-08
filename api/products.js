@@ -19,23 +19,40 @@ const cors = (res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
-/** Soft-compat columns — safe to omit on older DBs without blocking the write */
-const SOFT_OPTIONAL_COLUMNS = [
-  'hidden',
+/** Only these columns are written from the admin product form */
+const WRITABLE_COLUMNS = [
+  'name',
+  'slug',
+  'short_description',
+  'description',
+  'price',
+  'category_id',
+  'stock_quantity',
+  'images',
+  'active',
   'featured',
+  'hidden',
   'display_priority',
   'low_stock_threshold',
+  'colors',
+  'models',
+];
+
+/** Never accept manual edits of analytics counters from the admin UI */
+const FORBIDDEN_WRITE_COLUMNS = [
   'purchase_count',
   'view_count',
   'cart_count',
+  'trendingScore',
+  'isNewArrival',
+  'isBestSeller',
+  'stockPriority',
+  'revenue',
+  'category',
 ];
-
-/** Required by the admin product form — never silently drop these */
-const REQUIRED_SCHEMA_COLUMNS = ['colors', 'models', 'short_description'];
 
 function missingColumnFromError(error) {
   const msg = error?.message || '';
-  // PostgREST: Could not find the 'colors' column of 'products' in the schema cache
   const cacheMatch = msg.match(/Could not find the '([^']+)' column/i);
   if (cacheMatch) return cacheMatch[1];
   const pgMatch = msg.match(/column products\.(\w+) does not exist/i);
@@ -49,46 +66,40 @@ function isMissingProductColumn(error, column) {
   return new RegExp(`column products\\.${column} does not exist`, 'i').test(error?.message || '');
 }
 
-function migrationHint(column) {
-  return (
-    `Database is missing products.${column}. ` +
-    `Run phase5_products_columns_migration.sql in the Supabase SQL Editor, then retry.`
-  );
-}
-
-/**
- * Query products, optionally filtering hidden=false.
- * If the DB has not been migrated yet (no `hidden` column), retry without the filter
- * so the storefront never 500s on a schema drift.
- */
-async function queryProducts(applyFilters, { single = false } = {}) {
-  const exec = async (filterHidden) => {
-    let q = supabase.from('products').select('*');
-    q = applyFilters(q, filterHidden);
-    return single ? await q.single() : await q;
-  };
-
-  let result = await exec(true);
-  if (result.error && isMissingProductColumn(result.error, 'hidden')) {
-    result = await exec(false);
+/** Client-safe message; technical details stay in server logs */
+function friendlySchemaError(missing) {
+  if (missing === 'colors' || missing === 'models') {
+    return {
+      error: 'Product options could not be saved. Please try again.',
+      code: 'SCHEMA_OPTIONS',
+      missingColumn: missing,
+      migrationRequired: true,
+    };
   }
-  return result;
+  if (missing === 'featured' || missing === 'hidden' || missing === 'active') {
+    return {
+      error: 'Visibility settings could not be saved. Please try again.',
+      code: 'SCHEMA_VISIBILITY',
+      missingColumn: missing,
+      migrationRequired: true,
+    };
+  }
+  if (missing === 'short_description' || missing === 'display_priority' || missing === 'low_stock_threshold') {
+    return {
+      error: 'Product details could not be saved. Please try again.',
+      code: 'SCHEMA_PRODUCT',
+      missingColumn: missing,
+      migrationRequired: true,
+    };
+  }
+  return {
+    error: 'Product could not be saved. Please try again.',
+    code: 'SCHEMA_UNKNOWN',
+    missingColumn: missing || undefined,
+    migrationRequired: Boolean(missing),
+  };
 }
 
-function stripUnknownProductFields(payload) {
-  const {
-    category,
-    trendingScore,
-    isNewArrival,
-    stockPriority,
-    isBestSeller,
-    revenue,
-    ...rest
-  } = payload || {};
-  return rest;
-}
-
-/** Normalize colors/models to text[] — accept array or comma-separated string */
 function normalizeSpecArray(value) {
   if (Array.isArray(value)) {
     return value.map((x) => String(x).trim()).filter(Boolean);
@@ -102,26 +113,67 @@ function normalizeSpecArray(value) {
   return [];
 }
 
-function prepareProductPayload(body) {
-  const payload = stripUnknownProductFields(body);
+function prepareProductPayload(body, { forInsert = false, name } = {}) {
+  const raw = body || {};
+  for (const key of FORBIDDEN_WRITE_COLUMNS) {
+    delete raw[key];
+  }
+
+  const payload = {};
+  for (const key of WRITABLE_COLUMNS) {
+    if (key === 'slug' && !forInsert) continue;
+    if (key in raw) payload[key] = raw[key];
+  }
+
+  if (forInsert && name) {
+    payload.slug = `${String(name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')}-${Date.now().toString().slice(-5)}`;
+  }
+
   if ('colors' in payload) payload.colors = normalizeSpecArray(payload.colors);
   if ('models' in payload) payload.models = normalizeSpecArray(payload.models);
-  if (payload.display_priority === '') payload.display_priority = null;
-  if (payload.display_priority != null && payload.display_priority !== '') {
+
+  if (payload.display_priority === '' || payload.display_priority == null) {
+    if ('display_priority' in payload) payload.display_priority = null;
+  } else {
     const n = Number(payload.display_priority);
-    payload.display_priority = Number.isFinite(n) ? n : null;
+    payload.display_priority = Number.isFinite(n) && n >= 1 ? n : null;
   }
+
+  if ('price' in payload) payload.price = Number(payload.price);
+  if ('stock_quantity' in payload) payload.stock_quantity = Number(payload.stock_quantity);
+  if ('low_stock_threshold' in payload) {
+    const n = Number(payload.low_stock_threshold);
+    payload.low_stock_threshold = Number.isFinite(n) && n >= 0 ? n : 5;
+  }
+
+  if ('featured' in payload) payload.featured = Boolean(payload.featured);
+  if ('hidden' in payload) payload.hidden = Boolean(payload.hidden);
+  if ('active' in payload) payload.active = Boolean(payload.active);
+
+  if ('images' in payload) {
+    payload.images = Array.isArray(payload.images)
+      ? payload.images.filter((u) => typeof u === 'string' && u.trim())
+      : [];
+  }
+
   return payload;
 }
 
 /**
- * Retry insert/update after stripping soft-optional columns that PostgREST says are missing.
- * Missing colors/models/short_description always fail with a migration hint (never silent drop).
+ * Soft-compat write:
+ * - empty colors/models already omitted
+ * - if a missing column had an empty/default value, strip and retry
+ * - if colors/models had real values and column is missing → friendly schema error
+ * - featured/hidden with real intent and missing column → friendly schema error
  */
 async function writeProduct(method, payload, id) {
   let current = { ...payload };
+  const maxAttempts = WRITABLE_COLUMNS.length + 2;
 
-  for (let attempt = 0; attempt < SOFT_OPTIONAL_COLUMNS.length + 1; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const result =
       method === 'insert'
         ? await supabase.from('products').insert(current).select().single()
@@ -130,23 +182,64 @@ async function writeProduct(method, payload, id) {
     if (!result.error) return { data: result.data, error: null };
 
     const missing = missingColumnFromError(result.error);
-    if (missing && REQUIRED_SCHEMA_COLUMNS.includes(missing)) {
-      console.error(`[products] required column missing: ${missing}`);
-      return { data: null, error: { message: migrationHint(missing), missingColumn: missing } };
+    if (!missing || !(missing in current)) {
+      console.error('[products] write error:', result.error?.message || result.error);
+      return { data: null, error: result.error };
     }
-    if (missing && missing in current && SOFT_OPTIONAL_COLUMNS.includes(missing)) {
-      console.error(`[products] soft-stripping missing column on write: ${missing}`);
-      const { [missing]: _removed, ...rest } = current;
+
+    const value = current[missing];
+    const isEmptyArray = Array.isArray(value) && value.length === 0;
+    const isNullish = value == null || value === '';
+    const isDefaultFalse = value === false && (missing === 'featured' || missing === 'hidden');
+    const isDefaultTrue = value === true && missing === 'active';
+    const isDefaultThresh = missing === 'low_stock_threshold' && (value === 5 || value == null);
+
+    // Safe to strip defaults so core product save / Featured still works when possible
+    if (
+      isEmptyArray ||
+      isNullish ||
+      isDefaultFalse ||
+      isDefaultTrue ||
+      isDefaultThresh ||
+      (missing === 'display_priority' && value == null)
+    ) {
+      console.warn(`[products] omitting missing column with empty/default value: ${missing}`);
+      const { [missing]: _drop, ...rest } = current;
       current = rest;
       continue;
     }
-    return { data: null, error: result.error };
+
+    // Non-empty optional / visibility field that the live DB cannot store
+    console.error(`[products] schema missing required column for write: ${missing}`, {
+      value,
+    });
+    return {
+      data: null,
+      error: { ...friendlySchemaError(missing), technical: result.error.message },
+    };
   }
 
   return {
     data: null,
-    error: { message: 'Too many missing product columns — apply phase5_products_columns_migration.sql' },
+    error: {
+      ...friendlySchemaError(null),
+      technical: 'Too many missing product columns',
+    },
   };
+}
+
+async function queryProducts(applyFilters, { single = false } = {}) {
+  const exec = async (filterHidden) => {
+    let q = supabase.from('products').select('*');
+    q = applyFilters(q, filterHidden);
+    return single ? await q.single() : await q;
+  };
+
+  let result = await exec(true);
+  if (result.error && isMissingProductColumn(result.error, 'hidden')) {
+    result = await exec(false);
+  }
+  return result;
 }
 
 export default async function handler(req, res) {
@@ -162,7 +255,6 @@ export default async function handler(req, res) {
       if (categoryError) throw categoryError;
 
       const thirtyDaysAgoStr = getTrendingCutoffISO();
-
       const { data: events } = await supabase
         .from('product_events')
         .select('product_id, event_type')
@@ -199,7 +291,6 @@ export default async function handler(req, res) {
         });
 
         const related = rankProducts(relatedRaw || [], eventCounts, categories).slice(0, 4);
-
         return res.status(200).json({ product: decorated, related });
       }
 
@@ -222,39 +313,41 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST') {
       const { name } = req.body || {};
-      if (!name) return res.status(400).json({ error: 'Name is required' });
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: 'Product name is required.' });
+      }
 
-      const payload = {
-        ...prepareProductPayload(req.body),
-        slug: `${String(name)
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/(^-|-$)/g, '')}-${Date.now().toString().slice(-5)}`,
-      };
+      const payload = prepareProductPayload(req.body, { forInsert: true, name: String(name).trim() });
+      payload.name = String(name).trim();
 
       const { data, error } = await writeProduct('insert', payload);
       if (error) {
-        const missing = error.missingColumn || missingColumnFromError(error);
-        if (missing) {
-          return res.status(500).json({ error: error.message || migrationHint(missing), missingColumn: missing });
+        if (error.code || error.migrationRequired) {
+          return res.status(500).json(error);
         }
-        throw error;
+        const missing = missingColumnFromError(error);
+        if (missing) return res.status(500).json(friendlySchemaError(missing));
+        console.error('[products] insert failed:', error.message || error);
+        return res.status(500).json({ error: 'Product could not be saved. Please try again.' });
       }
       return res.status(201).json(data);
     }
 
     if (req.method === 'PUT') {
       const { id, ...raw } = req.body || {};
-      if (!id) return res.status(400).json({ error: 'id is required' });
-      const payload = prepareProductPayload(raw);
+      if (!id) return res.status(400).json({ error: 'Product id is required.' });
+
+      const payload = prepareProductPayload(raw, { forInsert: false });
 
       const { data, error } = await writeProduct('update', payload, id);
       if (error) {
-        const missing = error.missingColumn || missingColumnFromError(error);
-        if (missing) {
-          return res.status(500).json({ error: error.message || migrationHint(missing), missingColumn: missing });
+        if (error.code || error.migrationRequired) {
+          return res.status(500).json(error);
         }
-        throw error;
+        const missing = missingColumnFromError(error);
+        if (missing) return res.status(500).json(friendlySchemaError(missing));
+        console.error('[products] update failed:', error.message || error);
+        return res.status(500).json({ error: 'Product could not be saved. Please try again.' });
       }
       return res.status(200).json(data);
     }
@@ -267,11 +360,9 @@ export default async function handler(req, res) {
 
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (e) {
-    console.error(e);
+    console.error('[products]', e);
     const missing = missingColumnFromError(e);
-    return res.status(500).json({
-      error: missing ? migrationHint(missing) : e.message,
-      ...(missing ? { missingColumn: missing } : {}),
-    });
+    if (missing) return res.status(500).json(friendlySchemaError(missing));
+    return res.status(500).json({ error: 'Product could not be saved. Please try again.' });
   }
 }
