@@ -140,7 +140,9 @@ export const translations = {
       ordering: 'Reserving your order…',
       openingWhatsApp: 'Order reserved. Opening WhatsApp…',
       orderError: 'We could not reserve your order. Please try again.',
-      whatsappMessage: (orderNumber: string, lines: string, total: string) => `Hello,\n\nI would like to place the following order (${orderNumber}):\n\n${lines}\n\nTotal: ${total}\n\nI would like more information regarding delivery.\n\nThank you.`
+      whatsappOpenError: 'Your order was reserved, but WhatsApp could not be opened. Please allow pop-ups or contact us manually.',
+      whatsappMessage: (orderNumber: string, lines: string, total: string, storeName = "KEN'S SHOP") =>
+        `Hello ${storeName} 👋\n\nI would like to place the following order:\n\nOrder: #${orderNumber}\n\n${lines}\n\nTotal: ${total}\n\nPlease confirm the order and let me know the delivery details.\n\nThank you!`,
     },
     admin: {
       loginTitle: 'Owner sign in.',
@@ -498,7 +500,9 @@ export const translations = {
       ordering: 'Réservation de votre commande…',
       openingWhatsApp: 'Commande réservée. Ouverture de WhatsApp…',
       orderError: 'Impossible de réserver votre commande. Veuillez réessayer.',
-      whatsappMessage: (orderNumber: string, lines: string, total: string) => `Bonjour,\n\nJe souhaite passer la commande suivante (${orderNumber}) :\n\n${lines}\n\nTotal : ${total}\n\nJ'aimerais plus d'informations concernant la livraison.\n\nMerci.`
+      whatsappOpenError: 'Votre commande a été réservée, mais WhatsApp n\'a pas pu s\'ouvrir. Autorisez les pop-ups ou contactez-nous manuellement.',
+      whatsappMessage: (orderNumber: string, lines: string, total: string, storeName = "KEN'S SHOP") =>
+        `Bonjour ${storeName} 👋\n\nJe souhaite passer la commande suivante :\n\nCommande : #${orderNumber}\n\n${lines}\n\nTotal : ${total}\n\nMerci de bien vouloir confirmer ma commande et m'indiquer les modalités de livraison.\n\nMerci !`,
     },
     admin: {
       loginTitle: 'Connexion Propriétaire.',

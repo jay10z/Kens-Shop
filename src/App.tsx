@@ -568,22 +568,68 @@ function Cart(){
   const [ordering,setOrdering]=useState(false);
   const [toast,setToast]=useState<{text:string;tone:'ok'|'err'|'info'}|null>(null);
   const [error,setError]=useState('');
-  const {t}=useI18n();
+  const {t,lang}=useI18n();
+  const {user}=useAuth();
+
+  const friendlyOrderError=(err:any)=>{
+    const m=String(err?.message||err||'');
+    const code=err?.code||'';
+    if(code==='SCHEMA_ORDER_ITEMS'||/product_name|schema cache|order_items|column/i.test(m))return t('cart.orderError');
+    if(/timed out/i.test(m))return t('cart.orderError');
+    if(/empty|invalid cart/i.test(m))return t('cart.orderError');
+    if(/postgrest|postgres|PGRST/i.test(m))return t('cart.orderError');
+    return t('cart.orderError');
+  };
+
   const order=async()=>{
     if(ordering||!items.length)return;
     setOrdering(true);setError('');setToast({text:t('cart.ordering'),tone:'info'});
     try{
-      const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items.map((x:any)=>({product_id:x.product.id,product_name:x.product.name,price:x.product.price,quantity:x.quantity,color:x.color,model:x.model})),total})});
-      const lines=items.map((x:any)=>`• ${x.product.name}${x.color?` · ${x.color}`:''}${x.model?` · ${x.model}`:''} × ${x.quantity}`).join('\n');
-      const text=t('cart.whatsappMessage', d.order_number, lines, money(total));
+      const payload={
+        items:items.map((x:any)=>({
+          product_id:x.product.id,
+          product_name:x.product.name,
+          price:x.product.price,
+          quantity:x.quantity,
+          color:x.color,
+          model:x.model,
+        })),
+        total,
+      };
+      const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(!d?.order_number)throw new Error(t('cart.orderError'));
+
+      const lines=items.map((x:any)=>{
+        const meta=[x.color,x.model].filter(Boolean).join(' · ');
+        const label=meta?`${x.product.name} (${meta})`:x.product.name;
+        return `• ${label} × ${x.quantity} — ${money(x.product.price)}`;
+      }).join('\n');
+
+      let text=String(t('cart.whatsappMessage', d.order_number, lines, money(total), BRAND.fullName));
+      const customerName=String(user?.user_metadata?.full_name||user?.user_metadata?.name||'').trim();
+      const customerEmail=String(user?.email||'').trim();
+      if(customerName||customerEmail){
+        const bits=[customerName,customerEmail].filter(Boolean).join(' · ');
+        text+=lang==='fr'?`\n\nClient : ${bits}`:`\n\nCustomer: ${bits}`;
+      }
+      const wa=whatsappUrl(text);
       setToast({text:t('cart.openingWhatsApp'),tone:'ok'});
       clear();
-      window.setTimeout(()=>window.open(whatsappUrl(text),'_blank','noopener,noreferrer'),450);
+      window.setTimeout(()=>{
+        const opened=window.open(wa,'_blank','noopener,noreferrer');
+        if(!opened){
+          setError(t('cart.whatsappOpenError'));
+          setToast({text:t('cart.whatsappOpenError'),tone:'err'});
+        }
+      },450);
     }catch(e:any){
-      setError(e.message||t('cart.orderError'));
-      setToast({text:e.message||t('cart.orderError'),tone:'err'});
+      console.error('[cart order]',e);
+      const msg=friendlyOrderError(e);
+      setError(msg);
+      setToast({text:msg,tone:'err'});
     }finally{setOrdering(false)}
   };
+
   return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={x.product.images?.[0]} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={t('cart.emptyText')} action={<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
 }
 function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty" role="status"><Gem aria-hidden="true"/><h3>{text}</h3>{action}</div>}

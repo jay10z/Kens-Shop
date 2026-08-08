@@ -5,6 +5,7 @@
 --   3) phase4_hero_slides_migration.sql
 --   4) phase4_categories_migration.sql
 --   5) phase5_products_columns_migration.sql  (colors/models/short_description/etc.)
+--   6) phase7_order_items_product_name_migration.sql  (order_items.product_name snapshot)
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
