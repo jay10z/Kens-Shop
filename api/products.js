@@ -19,8 +19,41 @@ const cors = (res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
-function isMissingHiddenColumn(error) {
-  return /column products\.hidden does not exist/i.test(error?.message || '');
+/** Soft-compat columns — safe to omit on older DBs without blocking the write */
+const SOFT_OPTIONAL_COLUMNS = [
+  'hidden',
+  'featured',
+  'display_priority',
+  'low_stock_threshold',
+  'purchase_count',
+  'view_count',
+  'cart_count',
+];
+
+/** Required by the admin product form — never silently drop these */
+const REQUIRED_SCHEMA_COLUMNS = ['colors', 'models', 'short_description'];
+
+function missingColumnFromError(error) {
+  const msg = error?.message || '';
+  // PostgREST: Could not find the 'colors' column of 'products' in the schema cache
+  const cacheMatch = msg.match(/Could not find the '([^']+)' column/i);
+  if (cacheMatch) return cacheMatch[1];
+  const pgMatch = msg.match(/column products\.(\w+) does not exist/i);
+  if (pgMatch) return pgMatch[1];
+  return null;
+}
+
+function isMissingProductColumn(error, column) {
+  const found = missingColumnFromError(error);
+  if (found) return found === column;
+  return new RegExp(`column products\\.${column} does not exist`, 'i').test(error?.message || '');
+}
+
+function migrationHint(column) {
+  return (
+    `Database is missing products.${column}. ` +
+    `Run phase5_products_columns_migration.sql in the Supabase SQL Editor, then retry.`
+  );
 }
 
 /**
@@ -36,23 +69,84 @@ async function queryProducts(applyFilters, { single = false } = {}) {
   };
 
   let result = await exec(true);
-  if (result.error && isMissingHiddenColumn(result.error)) {
+  if (result.error && isMissingProductColumn(result.error, 'hidden')) {
     result = await exec(false);
   }
   return result;
 }
 
 function stripUnknownProductFields(payload) {
-  // Soft-compat: drop ranking/meta fields that are not DB columns.
   const {
     category,
     trendingScore,
     isNewArrival,
     stockPriority,
     isBestSeller,
+    revenue,
     ...rest
   } = payload || {};
   return rest;
+}
+
+/** Normalize colors/models to text[] — accept array or comma-separated string */
+function normalizeSpecArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function prepareProductPayload(body) {
+  const payload = stripUnknownProductFields(body);
+  if ('colors' in payload) payload.colors = normalizeSpecArray(payload.colors);
+  if ('models' in payload) payload.models = normalizeSpecArray(payload.models);
+  if (payload.display_priority === '') payload.display_priority = null;
+  if (payload.display_priority != null && payload.display_priority !== '') {
+    const n = Number(payload.display_priority);
+    payload.display_priority = Number.isFinite(n) ? n : null;
+  }
+  return payload;
+}
+
+/**
+ * Retry insert/update after stripping soft-optional columns that PostgREST says are missing.
+ * Missing colors/models/short_description always fail with a migration hint (never silent drop).
+ */
+async function writeProduct(method, payload, id) {
+  let current = { ...payload };
+
+  for (let attempt = 0; attempt < SOFT_OPTIONAL_COLUMNS.length + 1; attempt++) {
+    const result =
+      method === 'insert'
+        ? await supabase.from('products').insert(current).select().single()
+        : await supabase.from('products').update(current).eq('id', id).select().single();
+
+    if (!result.error) return { data: result.data, error: null };
+
+    const missing = missingColumnFromError(result.error);
+    if (missing && REQUIRED_SCHEMA_COLUMNS.includes(missing)) {
+      console.error(`[products] required column missing: ${missing}`);
+      return { data: null, error: { message: migrationHint(missing), missingColumn: missing } };
+    }
+    if (missing && missing in current && SOFT_OPTIONAL_COLUMNS.includes(missing)) {
+      console.error(`[products] soft-stripping missing column on write: ${missing}`);
+      const { [missing]: _removed, ...rest } = current;
+      current = rest;
+      continue;
+    }
+    return { data: null, error: result.error };
+  }
+
+  return {
+    data: null,
+    error: { message: 'Too many missing product columns — apply phase5_products_columns_migration.sql' },
+  };
 }
 
 export default async function handler(req, res) {
@@ -88,7 +182,15 @@ export default async function handler(req, res) {
         );
         if (error) throw error;
 
-        const decorated = decorateProduct(product, eventCounts, categories);
+        const decorated = decorateProduct(
+          {
+            ...product,
+            colors: Array.isArray(product.colors) ? product.colors : [],
+            models: Array.isArray(product.models) ? product.models : [],
+          },
+          eventCounts,
+          categories
+        );
 
         const { data: relatedRaw } = await queryProducts((q, filterHidden) => {
           q = q.eq('category_id', product.category_id).neq('id', product.id);
@@ -107,43 +209,53 @@ export default async function handler(req, res) {
       });
       if (error) throw error;
 
-      return res.status(200).json(rankProducts(products || [], eventCounts, categories));
+      const normalized = (products || []).map((p) => ({
+        ...p,
+        colors: Array.isArray(p.colors) ? p.colors : [],
+        models: Array.isArray(p.models) ? p.models : [],
+      }));
+
+      return res.status(200).json(rankProducts(normalized, eventCounts, categories));
     }
 
     if (!(await admin(req))) return res.status(401).json({ error: 'Unauthorized' });
 
     if (req.method === 'POST') {
-      const { name } = req.body;
+      const { name } = req.body || {};
       if (!name) return res.status(400).json({ error: 'Name is required' });
 
-      let payload = {
-        ...stripUnknownProductFields(req.body),
-        slug: `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${Date.now().toString().slice(-5)}`,
+      const payload = {
+        ...prepareProductPayload(req.body),
+        slug: `${String(name)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '')}-${Date.now().toString().slice(-5)}`,
       };
 
-      let { data, error } = await supabase.from('products').insert(payload).select().single();
-      if (error && isMissingHiddenColumn(error) && 'hidden' in payload) {
-        const { hidden, ...rest } = payload;
-        payload = rest;
-        ({ data, error } = await supabase.from('products').insert(payload).select().single());
+      const { data, error } = await writeProduct('insert', payload);
+      if (error) {
+        const missing = error.missingColumn || missingColumnFromError(error);
+        if (missing) {
+          return res.status(500).json({ error: error.message || migrationHint(missing), missingColumn: missing });
+        }
+        throw error;
       }
-      if (error) throw error;
       return res.status(201).json(data);
     }
 
     if (req.method === 'PUT') {
-      const { id, ...raw } = req.body;
-      let payload = stripUnknownProductFields(raw);
+      const { id, ...raw } = req.body || {};
+      if (!id) return res.status(400).json({ error: 'id is required' });
+      const payload = prepareProductPayload(raw);
 
-      if (payload.display_priority === '') payload.display_priority = null;
-
-      let { data, error } = await supabase.from('products').update(payload).eq('id', id).select().single();
-      if (error && isMissingHiddenColumn(error) && 'hidden' in payload) {
-        const { hidden, ...rest } = payload;
-        payload = rest;
-        ({ data, error } = await supabase.from('products').update(payload).eq('id', id).select().single());
+      const { data, error } = await writeProduct('update', payload, id);
+      if (error) {
+        const missing = error.missingColumn || missingColumnFromError(error);
+        if (missing) {
+          return res.status(500).json({ error: error.message || migrationHint(missing), missingColumn: missing });
+        }
+        throw error;
       }
-      if (error) throw error;
       return res.status(200).json(data);
     }
 
@@ -156,6 +268,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: e.message });
+    const missing = missingColumnFromError(e);
+    return res.status(500).json({
+      error: missing ? migrationHint(missing) : e.message,
+      ...(missing ? { missingColumn: missing } : {}),
+    });
   }
 }

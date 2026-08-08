@@ -33,7 +33,11 @@ function ThemeProvider({ children }: { children: ReactNode }) {
     return initial;
   });
   useEffect(() => { applyTheme(theme); }, [theme]);
-  const toggle = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'));
+  const toggle = () => setTheme((t) => {
+    const next = t === 'light' ? 'dark' : 'light';
+    applyTheme(next);
+    return next;
+  });
   const value = useMemo(() => ({ theme, toggle }), [theme]);
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
@@ -41,13 +45,23 @@ function useThemeMode() {
   return useContext(ThemeContext);
 }
 const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
+const API_TIMEOUT_MS=20000;
 async function api(path:string, options?:RequestInit){
-  const r=await fetch(path,options);
-  const text=await r.text();
-  let d:any=null;
-  try{d=text?JSON.parse(text):null}catch{throw new Error(r.ok?'Invalid server response':'Something went wrong')}
-  if(!r.ok)throw new Error(d?.error||'Something went wrong');
-  return d;
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),API_TIMEOUT_MS);
+  try{
+    const r=await fetch(path,{...options,signal:controller.signal});
+    const text=await r.text();
+    let d:any=null;
+    try{d=text?JSON.parse(text):null}catch{throw new Error(r.ok?'Invalid server response':'Something went wrong')}
+    if(!r.ok)throw new Error(d?.error||'Something went wrong');
+    return d;
+  }catch(e:any){
+    if(e?.name==='AbortError')throw new Error('Request timed out. Please try again.');
+    throw e;
+  }finally{
+    clearTimeout(timeoutId);
+  }
 }
 /** Same inventory levels as api/ranking.js — Healthy=1, Low=2, Out=3 */
 function resolveStockPriority(p:{stock_quantity?:number;low_stock_threshold?:number;stockPriority?:number}){
@@ -594,14 +608,30 @@ function AdminDashboard(){
   const [data,setData]=useState<any>(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
+  const [warnings,setWarnings]=useState<string[]>([]);
   const {session}=useAuth();
   const {t}=useI18n();
   const load=()=>{
-    if(!session?.access_token){setLoading(false);return;}
-    setLoading(true);setError('');
+    if(!session?.access_token){
+      setLoading(false);
+      setError(t('admin.dashboardAuthError'));
+      return;
+    }
+    setLoading(true);setError('');setWarnings([]);
     api('/api/dashboard',{headers:{Authorization:`Bearer ${session.access_token}`}})
-      .then((d)=>{setData(d);if(d?.error)setError(d.error)})
-      .catch((e:any)=>setError(e.message||t('home.loadError')))
+      .then((d)=>{
+        setData(d||null);
+        if(Array.isArray(d?.warnings)&&d.warnings.length){
+          setWarnings(d.warnings);
+          if(import.meta.env.DEV)console.warn('[dashboard warnings]',d.warnings);
+        }
+        if(d?.error)setError(d.error);
+      })
+      .catch((e:any)=>{
+        if(import.meta.env.DEV)console.error('[dashboard]',e);
+        setError(e.message||t('admin.dashboardLoadError'));
+        setData(null);
+      })
       .finally(()=>setLoading(false));
   };
   useEffect(()=>{load()},[session?.access_token]);
@@ -631,6 +661,7 @@ function AdminDashboard(){
   return <AdminShell><section className="admin-content">
     <div className="admin-title"><div><p className="eyebrow gold">{t('admin.dashboardEyebrow')}</p><h1>{t('admin.dashboardTitle')}</h1></div><Link to="/admin/products" className="btn gold-btn"><Plus/> {t('admin.addProduct')}</Link></div>
     {error&&<p className="error" role="alert" style={{marginBottom:'1.25rem'}}>{error} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
+    {!error&&warnings.length>0&&<p className="fine" role="status" style={{marginBottom:'1.25rem',color:'var(--fg-muted)'}}>{t('admin.dashboardPartial')} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
     <div className="stat-grid simple-stats">{cards.map(([n,v,I]:any)=><article key={n}><I/><span>{n}</span><strong>{v}</strong></article>)}</div>
     <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.analyticsEyebrow')}</p><h2>{t('admin.analyticsTitle')}</h2></div></div>
     <div className="stat-grid simple-stats">{widgets.map(w=><article key={w.label}><span style={{fontSize:'1.5rem'}}>{w.icon}</span><span>{w.label}</span><strong style={{fontSize:'0.85rem',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{w.product?.name||'—'}</strong></article>)}</div>
@@ -663,7 +694,7 @@ function AdminProducts(){
   const {session}=useAuth();
   const {t}=useI18n();
   const load=()=>{
-    if(!session?.access_token)return;
+    if(!session?.access_token){setLoading(false);setError(t('admin.dashboardAuthError'));return;}
     setLoading(true);
     Promise.all([api('/api/products?admin=true',{headers:authHeaders(session.access_token)}),api('/api/categories')])
       .then(([p,c])=>{setProducts(p);setCats(c);setError('')})
@@ -696,6 +727,11 @@ function Stock({n,threshold=5,priority}:{n:number;threshold?:number;priority?:nu
 }
 function ProductModal({item,cats,token,close,done,error,setError}:any){
   const {t}=useI18n();
+  const toCsv=(v:unknown)=>{
+    if(Array.isArray(v))return v.map(x=>String(x).trim()).filter(Boolean).join(', ');
+    if(typeof v==='string')return v;
+    return '';
+  };
   const [form,setForm]=useState({
     name:item.name||'',
     short_description:item.short_description||'',
@@ -704,8 +740,8 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     category_id:item.category_id||cats[0]?.id||'',
     stock_quantity:item.stock_quantity??1,
     low_stock_threshold:item.low_stock_threshold??5,
-    colors:(item.colors||[]).join(', '),
-    models:(item.models||[]).join(', '),
+    colors:toCsv(item.colors),
+    models:toCsv(item.models),
     images:item.images||[],
     featured:item.featured||false,
     hidden:item.hidden||false,
@@ -716,6 +752,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
   const [uploading,setUploading]=useState(false);
   const busy=saving||uploading;
   const set=(k:string,v:any)=>setForm(x=>({...x,[k]:v}));
+  const parseList=(raw:string)=>raw.split(',').map((x:string)=>x.trim()).filter(Boolean);
   const validate=()=>{
     if(!form.name.trim())return t('admin.validationName');
     if(!form.short_description.trim())return t('admin.validationShort');
@@ -757,8 +794,8 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
         stock_quantity:Number(form.stock_quantity),
         low_stock_threshold:Number(form.low_stock_threshold),
         display_priority:form.display_priority===''?null:Number(form.display_priority),
-        colors:form.colors.split(',').map((x:string)=>x.trim()).filter(Boolean),
-        models:form.models.split(',').map((x:string)=>x.trim()).filter(Boolean),
+        colors:parseList(form.colors),
+        models:parseList(form.models),
       })});
       done();
     }catch(e:any){setError(e.message||t('admin.productSaveError'))}finally{setSaving(false)}
@@ -824,14 +861,14 @@ function AdminHero(){
   const {session}=useAuth();
   const {t}=useI18n();
   const load=()=>{
-    if(!session?.access_token)return;
+    if(!session?.access_token){setLoading(false);setError(t('admin.dashboardAuthError'));return;}
     setLoading(true);
     api('/api/hero?admin=true',{headers:authHeaders(session.access_token)})
       .then((data)=>{setSlides(Array.isArray(data)?data:[]);setError('')})
       .catch((e:any)=>setError(e.message||t('admin.heroEmpty')))
       .finally(()=>setLoading(false));
   };
-  useEffect(()=>{if(session?.access_token)load()},[session?.access_token]);
+  useEffect(()=>{load()},[session?.access_token]);
 
   const upload=async(files:FileList|null)=>{
     if(!files?.length||!editing)return;

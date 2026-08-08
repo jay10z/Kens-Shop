@@ -27,34 +27,88 @@ const emptyDashboard = {
   runningLow: [],
 };
 
+const QUERY_TIMEOUT_MS = 10000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
+async function softQuery(label, queryFactory) {
+  try {
+    const result = await withTimeout(queryFactory(), QUERY_TIMEOUT_MS, label);
+    if (result?.error) {
+      console.error(`[dashboard] ${label}:`, result.error.message || result.error);
+      return { data: [], error: result.error, warning: `${label}: ${result.error.message}` };
+    }
+    return { data: result?.data || [], error: null, warning: null };
+  } catch (e) {
+    console.error(`[dashboard] ${label}:`, e.message || e);
+    return { data: [], error: e, warning: `${label}: ${e.message || 'failed'}` };
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
 
+  const warnings = [];
+
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    const { data: { user } } = await supabase.auth.getUser(token);
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+    let user = null;
+    try {
+      const authResult = await withTimeout(
+        supabase.auth.getUser(token),
+        QUERY_TIMEOUT_MS,
+        'auth'
+      );
+      user = authResult?.data?.user || null;
+      if (authResult?.error) {
+        console.error('[dashboard] auth:', authResult.error.message);
+      }
+    } catch (e) {
+      console.error('[dashboard] auth:', e.message || e);
+      return res.status(200).json({
+        ...emptyDashboard,
+        error: 'Authentication timed out. Please refresh and try again.',
+        warnings: [`auth: ${e.message || 'timed out'}`],
+      });
+    }
+
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    // select('*') survives schema drift; specific columns previously 500'd the dashboard.
+    // Independent soft queries — one failure must not block the whole dashboard
     const [pResult, oResult, itemsResult, eventsResult] = await Promise.all([
-      supabase.from('products').select('*'),
-      supabase.from('orders').select('*').order('created_at', { ascending: false }),
-      supabase.from('order_items').select('*'),
-      supabase
-        .from('product_events')
-        .select('product_id, event_type')
-        .gte('created_at', getTrendingCutoffISO()),
+      softQuery('products', () => supabase.from('products').select('*')),
+      softQuery('orders', () =>
+        supabase.from('orders').select('*').order('created_at', { ascending: false })
+      ),
+      softQuery('order_items', () => supabase.from('order_items').select('*')),
+      softQuery('product_events', () =>
+        supabase
+          .from('product_events')
+          .select('product_id, event_type')
+          .gte('created_at', getTrendingCutoffISO())
+      ),
     ]);
 
-    if (pResult.error) throw pResult.error;
-    // Orders / items / events may be empty or tables may be missing on older DBs
+    for (const r of [pResult, oResult, itemsResult, eventsResult]) {
+      if (r.warning) warnings.push(r.warning);
+    }
+
     const p = pResult.data || [];
-    const o = oResult.error ? [] : oResult.data || [];
-    const orderItems = itemsResult.error ? [] : itemsResult.data || [];
-    const eventCounts = buildEventCounts(eventsResult.error ? [] : eventsResult.data || []);
+    const o = oResult.data || [];
+    const orderItems = itemsResult.data || [];
+    const eventCounts = buildEventCounts(eventsResult.data || []);
 
     const productsWithStats = p.map((product) => {
       const decorated = decorateProduct(product, eventCounts);
@@ -84,6 +138,7 @@ export default async function handler(req, res) {
     const today = new Date().toISOString().slice(0, 10);
     const delivered = o.filter((x) => x.status === 'Delivered');
 
+    const criticalFailure = Boolean(pResult.error);
     return res.status(200).json({
       ...emptyDashboard,
       totalProducts: p.length,
@@ -101,19 +156,17 @@ export default async function handler(req, res) {
       mostCart,
       highestRevenue,
       runningLow: productsRunningLow(productsWithStats, 8),
-      warnings: [
-        oResult.error && `orders: ${oResult.error.message}`,
-        itemsResult.error && `order_items: ${itemsResult.error.message}`,
-        eventsResult.error && `product_events: ${eventsResult.error.message}`,
-      ].filter(Boolean),
+      warnings,
+      ...(criticalFailure
+        ? { error: 'Some dashboard data could not be loaded. Partial results shown.' }
+        : {}),
     });
   } catch (e) {
-    console.error(e);
-    // Never leave the admin UI spinning forever
+    console.error('[dashboard]', e);
     return res.status(200).json({
       ...emptyDashboard,
-      error: e.message,
-      warnings: [e.message],
+      error: e.message || 'Dashboard failed to load',
+      warnings: [e.message || 'Dashboard failed to load'],
     });
   }
 }

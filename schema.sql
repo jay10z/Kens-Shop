@@ -4,6 +4,7 @@
 --   2) sprint1_task1_1_schema_hardening.sql
 --   3) phase4_hero_slides_migration.sql
 --   4) phase4_categories_migration.sql
+--   5) phase5_products_columns_migration.sql  (colors/models/short_description/etc.)
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -8,6 +8,24 @@ const AuthContext = createContext<{ user: User | null; session: Session | null; 
   loading: true,
 });
 
+const SESSION_TIMEOUT_MS = 12000;
+
+function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -19,17 +37,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
-    });
+    let cancelled = false;
+
+    withTimeout(supabase.auth.getSession(), SESSION_TIMEOUT_MS, 'Auth session')
+      .then(({ data }) => {
+        if (cancelled) return;
+        setSession(data.session);
+      })
+      .catch((err) => {
+        console.error('[auth] getSession failed:', err);
+        if (!cancelled) setSession(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_e, s) => {
+      if (cancelled) return;
       setSession(s);
       setLoading(false);
     });
-    return () => subscription.unsubscribe();
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   return (

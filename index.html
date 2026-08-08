@@ -9,6 +9,19 @@
     <meta property="og:title" content="KENS SHOP — Objects of Distinction" />
     <meta property="og:description" content="Discover rare fragrance, timepieces and accessories with private WhatsApp concierge service." />
     <title>KENS SHOP — Objects of Distinction</title>
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('ks-theme');
+          var theme = saved === 'light' || saved === 'dark'
+            ? saved
+            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
     <script data-arena-recording="true">(function(){
 "use strict";
 var SK="__arena_rec",RRWEB_CDN="https://cdn.jsdelivr.net/npm/rrweb@2.0.0-alpha.4/dist/rrweb.min.js";
