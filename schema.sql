@@ -122,5 +122,6 @@ CREATE INDEX IF NOT EXISTS idx_product_events_type_created_at ON product_events(
 CREATE INDEX IF NOT EXISTS idx_hero_slides_display_order ON hero_slides(display_order);
 CREATE INDEX IF NOT EXISTS idx_hero_slides_enabled ON hero_slides(enabled);
 
--- Note: If you use Supabase Storage for product images,
--- create a bucket such as `product-images` in the Supabase dashboard.
+-- Note: Product image uploads require a PUBLIC Supabase Storage bucket named
+-- exactly `product-images` (see api/upload.js). The upload API can create it
+-- with the service role if missing, but creating it once in the dashboard is fine.

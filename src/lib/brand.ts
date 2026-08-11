@@ -21,7 +21,7 @@ export const BRAND = {
 const digits = (value: string) => value.replace(/\D/g, '');
 
 export const SOCIAL = {
-  whatsappNumber: import.meta.env.VITE_WHATSAPP_NUMBER || '15551234567',
+  whatsappNumber: import.meta.env.VITE_WHATSAPP_NUMBER || '237671096764',
   instagramUrl: import.meta.env.VITE_INSTAGRAM_URL || 'https://www.instagram.com/',
   tiktokUrl: import.meta.env.VITE_TIKTOK_URL || 'https://www.tiktok.com/',
   email: import.meta.env.VITE_CONTACT_EMAIL || 'contact@kensshop.com',

@@ -3,6 +3,8 @@ import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams, useSear
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, X } from 'lucide-react';
 import { BRAND, SOCIAL, whatsappUrl, isExternalHref, categoryImageUrl, DEFAULT_HERO_ASSETS } from './lib/brand';
+import { money } from './lib/money';
+import { prepareImageForUpload, validateImageFile, UPLOAD_TIMEOUT_MS } from './lib/imageUpload';
 import { I18nProvider, useI18n } from './i18n/Context';
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
@@ -44,13 +46,14 @@ function ThemeProvider({ children }: { children: ReactNode }) {
 function useThemeMode() {
   return useContext(ThemeContext);
 }
-const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
 const API_TIMEOUT_MS=20000;
-async function api(path:string, options?:RequestInit){
+async function api(path:string, options?:RequestInit & {timeoutMs?:number}){
   const controller=new AbortController();
-  const timeoutId=setTimeout(()=>controller.abort(),API_TIMEOUT_MS);
+  const timeoutMs=options?.timeoutMs ?? API_TIMEOUT_MS;
+  const timeoutId=setTimeout(()=>controller.abort(),timeoutMs);
   try{
-    const r=await fetch(path,{...options,signal:controller.signal});
+    const {timeoutMs:_omit,...fetchOpts}=options||{};
+    const r=await fetch(path,{...fetchOpts,signal:controller.signal});
     const text=await r.text();
     let d:any=null;
     try{d=text?JSON.parse(text):null}catch{throw new Error(r.ok?'Invalid server response':'Something went wrong')}
@@ -67,6 +70,14 @@ async function api(path:string, options?:RequestInit){
     clearTimeout(timeoutId);
   }
 }
+
+type ProductImageDraft={
+  id:string;
+  preview:string;
+  url:string;
+  status:'preparing'|'uploading'|'uploaded'|'failed';
+  file?:File;
+};
 /** Same inventory levels as api/ranking.js — Healthy=1, Low=2, Out=3 */
 function resolveStockPriority(p:{stock_quantity?:number;low_stock_threshold?:number;stockPriority?:number}){
   if(p.stockPriority===1||p.stockPriority===2||p.stockPriority===3)return p.stockPriority;
@@ -92,6 +103,7 @@ function Toast({text,onClose,tone='ok'}:{text:string;onClose:()=>void;tone?:'ok'
 function ProductImage({src,alt,className=''}:{src?:string;alt:string;className?:string}){
   const [failed,setFailed]=useState(!src);
   const {t}=useI18n();
+  useEffect(()=>{setFailed(!src)},[src]);
   if(!src||failed){
     return <div className={`img-ph ${className}`} role="img" aria-label={alt||t('common.imageUnavailable')}><ImageIcon size={28}/></div>;
   }
@@ -810,19 +822,40 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     low_stock_threshold:item.low_stock_threshold??5,
     colors:toCsv(item.colors),
     models:toCsv(item.models),
-    images:Array.isArray(item.images)?[...item.images]:[],
     featured:!!item.featured,
     hidden:!!item.hidden,
     active:item.active??true,
     display_priority:item.display_priority??'',
   });
+  const [images,setImages]=useState<ProductImageDraft[]>(()=>(
+    Array.isArray(item.images)
+      ? item.images.filter(Boolean).map((url:string,i:number)=>({
+          id:`existing-${i}-${url}`,
+          preview:url,
+          url,
+          status:'uploaded' as const,
+        }))
+      : []
+  ));
   const [saving,setSaving]=useState(false);
-  const [uploading,setUploading]=useState(false);
-  const [uploadNote,setUploadNote]=useState('');
   const [showAdvanced,setShowAdvanced]=useState(false);
+  const uploading=images.some(im=>im.status==='preparing'||im.status==='uploading');
+  const hasFailed=images.some(im=>im.status==='failed');
+  const readyUrls=images.filter(im=>im.status==='uploaded'&&im.url).map(im=>im.url);
   const busy=saving||uploading;
   const set=(k:string,v:any)=>setForm(x=>({...x,[k]:v}));
   const parseList=(raw:string)=>String(raw||'').split(',').map((x:string)=>x.trim()).filter(Boolean);
+
+  useEffect(()=>()=>{
+    images.forEach(im=>{
+      if(im.preview?.startsWith('blob:'))URL.revokeObjectURL(im.preview);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  const patchImage=(id:string,patch:Partial<ProductImageDraft>)=>{
+    setImages(list=>list.map(im=>im.id===id?{...im,...patch}:im));
+  };
 
   const friendlySaveError=(err:any)=>{
     const code=err?.code||'';
@@ -834,7 +867,6 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     if(/unauthorized/i.test(m))return t('admin.dashboardAuthError');
     if(/migration|Database is missing/i.test(m))return t('admin.productOptionsSaveError');
     if(/could not be saved|something went wrong|invalid server|failed/i.test(m))return t('admin.productSaveError');
-    // Never surface raw PostgREST/schema text to the owner
     if(/postgrest|postgres|column|schema cache|PGRST/i.test(m))return t('admin.productSaveError');
     return t('admin.productSaveError');
   };
@@ -846,39 +878,90 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     if(form.stock_quantity===''||Number(form.stock_quantity)<0||Number.isNaN(Number(form.stock_quantity)))return t('admin.validationStock');
     if(form.low_stock_threshold!==''&&(Number(form.low_stock_threshold)<0||Number.isNaN(Number(form.low_stock_threshold))))return t('admin.validationLowStock');
     if(form.display_priority!==''&&(Number(form.display_priority)<1||Number.isNaN(Number(form.display_priority))))return t('admin.validationPriority');
-    if(!form.images.length)return t('admin.modal.errorImage');
+    if(uploading)return t('admin.modal.saveBlockedUploading');
+    if(!readyUrls.length)return t('admin.modal.errorImage');
+    if(hasFailed)return t('admin.modal.saveBlockedFailed');
     return '';
   };
 
   const moveImage=(from:number,to:number)=>{
-    if(to<0||to>=form.images.length)return;
-    setForm(x=>{
-      const next=[...x.images];
+    if(to<0||to>=images.length)return;
+    setImages(list=>{
+      const next=[...list];
       const [img]=next.splice(from,1);
       next.splice(to,0,img);
-      return {...x,images:next};
+      return next;
     });
   };
 
-  const upload=async(files:FileList|null)=>{
-    if(!files?.length||busy)return;
-    setUploading(true);setError('');setUploadNote(t('admin.uploadProgress'));
+  const removeImage=(id:string)=>{
+    setImages(list=>{
+      const target=list.find(im=>im.id===id);
+      if(target?.preview?.startsWith('blob:'))URL.revokeObjectURL(target.preview);
+      return list.filter(im=>im.id!==id);
+    });
+  };
+
+  const uploadOne=async(draft:ProductImageDraft)=>{
+    if(!draft.file){
+      patchImage(draft.id,{status:'failed'});
+      return;
+    }
+    patchImage(draft.id,{status:'preparing'});
     try{
-      const urls:string[]=[];
-      for(const file of Array.from(files)){
-        if(!file.type.startsWith('image/'))continue;
-        const base64=await new Promise<string>((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve((r.result as string).split(',')[1]);r.onerror=()=>reject(new Error(t('admin.uploadError')));r.readAsDataURL(file)});
-        const d=await api('/api/upload',{method:'POST',headers:authHeaders(token),body:JSON.stringify({fileName:`${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`,fileBase64:base64,contentType:file.type})});
-        if(d?.url)urls.push(d.url);
-      }
-      if(!urls.length)throw new Error(t('admin.uploadError'));
-      setForm(x=>({...x,images:[...x.images,...urls]}));
-      setUploadNote(t('admin.uploadSuccess'));
-    }catch(e:any){
+      const prepared=await prepareImageForUpload(draft.file);
+      patchImage(draft.id,{status:'uploading'});
+      const d=await api('/api/upload',{
+        method:'POST',
+        headers:authHeaders(token),
+        timeoutMs:UPLOAD_TIMEOUT_MS,
+        body:JSON.stringify({
+          fileName:`${Date.now()}-${prepared.fileName.replace(/[^a-zA-Z0-9._-]/g,'_')}`,
+          fileBase64:prepared.fileBase64,
+          contentType:prepared.contentType,
+        }),
+      });
+      if(!d?.url)throw new Error('no_url');
+      patchImage(draft.id,{status:'uploaded',url:d.url,preview:d.url,file:undefined});
+      if(draft.preview?.startsWith('blob:'))URL.revokeObjectURL(draft.preview);
+    }catch(e){
       console.error('[product upload]',e);
-      setUploadNote('');
-      setError(t('admin.uploadError'));
-    }finally{setUploading(false)}
+      patchImage(draft.id,{status:'failed'});
+    }
+  };
+
+  const queueFiles=async(files:FileList|null)=>{
+    if(!files?.length||saving)return;
+    setError('');
+    const accepted:ProductImageDraft[]=[];
+    for(const file of Array.from(files)){
+      const invalid=validateImageFile(file);
+      if(invalid==='invalid_type'){setError(t('admin.uploadInvalidType'));continue}
+      if(invalid==='too_large'){setError(t('admin.uploadTooLarge'));continue}
+      accepted.push({
+        id:`local-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+        preview:URL.createObjectURL(file),
+        url:'',
+        status:'preparing',
+        file,
+      });
+    }
+    if(!accepted.length)return;
+    setImages(list=>[...list,...accepted]);
+    // Upload independently so one failure does not discard others
+    await Promise.all(accepted.map(im=>uploadOne(im)));
+  };
+
+  const retryImage=async(id:string)=>{
+    const target=images.find(im=>im.id===id);
+    if(!target?.file)return;
+    setError('');
+    await uploadOne(target);
+  };
+
+  const discardFailed=()=>{
+    setImages(list=>list.filter(im=>im.status!=='failed'));
+    setError('');
   };
 
   const save=async(e:FormEvent)=>{
@@ -901,7 +984,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
         display_priority:form.display_priority===''?null:Number(form.display_priority),
         colors:parseList(form.colors),
         models:parseList(form.models),
-        images:form.images,
+        images:readyUrls,
         featured:!!form.featured,
         hidden:!!form.hidden,
         active:!!form.active,
@@ -911,6 +994,13 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
       console.error('[product save]',e);
       setError(friendlySaveError(e));
     }finally{setSaving(false)}
+  };
+
+  const statusLabel=(status:ProductImageDraft['status'])=>{
+    if(status==='preparing')return t('admin.uploadStatePreparing');
+    if(status==='uploading')return t('admin.uploadStateUploading');
+    if(status==='uploaded')return t('admin.uploadStateUploaded');
+    return t('admin.uploadStateFailed');
   };
 
   return <div className="modal-bg" role="presentation" onClick={(e)=>{if(e.target===e.currentTarget&&!busy)close()}}>
@@ -931,7 +1021,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
             <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} maxLength={180} placeholder={t('admin.modal.shortDescHint')}/></label>
             <label className="full">{t('admin.modal.desc')}<textarea value={form.description} onChange={e=>set('description',e.target.value)} rows={3} placeholder={t('admin.modal.descHint')}/></label>
             <label>{t('admin.modal.category')}<select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-            <label>{t('admin.modal.price')}<input type="number" min="0" step="0.01" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
+            <label>{t('admin.modal.price')}<input type="number" min="0" step="1" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
             <label>{t('admin.modal.stockQty')}<input type="number" min="0" value={form.stock_quantity} onChange={e=>set('stock_quantity',e.target.value)} required/></label>
           </div>
         </section>
@@ -941,24 +1031,31 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
           <p className="fine">{t('admin.modal.photosHint')}</p>
           <label className={`full upload ${uploading?'is-busy':''}`}>
             {t('admin.modal.photos')}
-            <input type="file" accept="image/*" multiple disabled={busy} onChange={e=>{upload(e.target.files);e.target.value=''}}/>
-            <span><Plus/> {uploading?t('admin.uploadProgress'):t('admin.modal.choosePhotos')}</span>
+            <input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple disabled={saving} onChange={e=>{queueFiles(e.target.files);e.target.value=''}}/>
+            <span><Plus/> {uploading?t('admin.uploadStateUploading'):t('admin.modal.choosePhotos')}</span>
           </label>
-          {uploadNote&&<p className="fine upload-status" role="status">{uploadNote}</p>}
           <div className="image-preview full">
-            {form.images.map((im:string,i:number)=>(
-              <div key={`${im}-${i}`} className="image-preview-item">
-                <ProductImage src={im} alt=""/>
-                {i===0?<em className="cover-tag">{t('admin.modal.coverBadge')}</em>:<em className="cover-tag muted">{i+1}</em>}
+            {images.map((im,i)=>(
+              <div key={im.id} className={`image-preview-item status-${im.status}`}>
+                <ProductImage src={im.preview||im.url} alt=""/>
+                {i===0?<em className="cover-tag">⭐ {t('admin.modal.coverBadge')}</em>:<em className="cover-tag muted">{i+1}</em>}
+                <span className={`upload-chip tone-${im.status}`}>{im.status==='uploaded'?<><Check size={12}/> {statusLabel(im.status)}</>:statusLabel(im.status)}</span>
                 <div className="image-preview-actions">
                   <button type="button" onClick={()=>moveImage(i,i-1)} disabled={busy||i===0} aria-label={t('admin.modal.moveImageLeft')}><ChevronLeft/></button>
-                  <button type="button" onClick={()=>moveImage(i,i+1)} disabled={busy||i===form.images.length-1} aria-label={t('admin.modal.moveImageRight')}><ChevronRight/></button>
-                  <button type="button" onClick={()=>set('images',form.images.filter((_:string,n:number)=>n!==i))} aria-label={t('admin.removeImage')} disabled={busy}><X/></button>
+                  <button type="button" onClick={()=>moveImage(i,i+1)} disabled={busy||i===images.length-1} aria-label={t('admin.modal.moveImageRight')}><ChevronRight/></button>
+                  {im.status==='failed'&&im.file?<button type="button" onClick={()=>retryImage(im.id)} disabled={saving}>{t('admin.uploadRetry')}</button>:null}
+                  <button type="button" onClick={()=>removeImage(im.id)} aria-label={t('admin.removeImage')} disabled={saving||im.status==='uploading'||im.status==='preparing'}><X/></button>
                 </div>
               </div>
             ))}
           </div>
-          {!form.images.length&&<p className="fine">{t('admin.modal.photosEmpty')}</p>}
+          {!images.length&&<p className="fine">{t('admin.modal.photosEmpty')}</p>}
+          {hasFailed&&(
+            <div className="upload-failed-bar">
+              <p className="fine">{t('admin.modal.failedPhotosHint')}</p>
+              <button type="button" className="text-btn" onClick={discardFailed}>{t('admin.modal.continueWithoutFailed')}</button>
+            </div>
+          )}
         </section>
 
         <section className="form-section">
@@ -1013,7 +1110,10 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
       {error&&<p className="error" role="alert">{error}</p>}
       <div className="modal-actions">
         <button type="button" onClick={close} disabled={busy}>{t('admin.modal.cancel')}</button>
-        <button className="btn gold-btn" disabled={busy} aria-busy={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {saving?t('admin.modal.saving'):t('admin.modal.save')}</button>
+        <button className="btn gold-btn" disabled={busy||hasFailed} aria-busy={busy}>
+          {busy?<Loader2 className="spin"/>:<Check/>}
+          {uploading?t('admin.modal.saveBlockedUploading'):saving?t('admin.modal.saving'):t('admin.modal.save')}
+        </button>
       </div>
     </form>
   </div>
@@ -1044,16 +1144,29 @@ function AdminHero(){
     setBusy(true);setError('');
     try{
       const file=files[0];
-      const base64=await new Promise<string>((resolve,reject)=>{
-        const r=new FileReader();
-        r.onload=()=>resolve((r.result as string).split(',')[1]);
-        r.onerror=()=>reject(new Error(t('admin.uploadError')));
-        r.readAsDataURL(file);
+      const invalid=validateImageFile(file);
+      if(invalid==='invalid_type')throw new Error(t('admin.uploadInvalidType'));
+      if(invalid==='too_large')throw new Error(t('admin.uploadTooLarge'));
+      const prepared=await prepareImageForUpload(file);
+      const d=await api('/api/upload',{
+        method:'POST',
+        headers:authHeaders(session?.access_token),
+        timeoutMs:UPLOAD_TIMEOUT_MS,
+        body:JSON.stringify({
+          fileName:`hero-${Date.now()}-${prepared.fileName.replace(/[^a-zA-Z0-9._-]/g,'_')}`,
+          fileBase64:prepared.fileBase64,
+          contentType:prepared.contentType,
+        }),
       });
-      const d=await api('/api/upload',{method:'POST',headers:authHeaders(session?.access_token),body:JSON.stringify({fileName:`hero-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`,fileBase64:base64,contentType:file.type||'image/jpeg'})});
       if(!d?.url)throw new Error(t('admin.uploadError'));
       setEditing((x:any)=>({...x,image_url:d.url}));
-    }catch(e:any){setError(e.message||t('admin.uploadError'))}finally{setBusy(false)}
+    }catch(e:any){
+      console.error('[hero upload]',e);
+      const code=e?.code||'';
+      if(code==='INVALID_TYPE'||/unsupported|format/i.test(String(e?.message||'')))setError(t('admin.uploadInvalidType'));
+      else if(code==='FILE_TOO_LARGE'||/too large|volumineuse/i.test(String(e?.message||'')))setError(t('admin.uploadTooLarge'));
+      else setError(t('admin.uploadError'));
+    }finally{setBusy(false)}
   };
 
   const save=async(e:FormEvent)=>{

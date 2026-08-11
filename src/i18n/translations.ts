@@ -240,6 +240,13 @@ export const translations = {
       uploadError: 'Image upload failed. Please try again.',
       uploadProgress: 'Uploading images…',
       uploadSuccess: 'Photos uploaded. Click Save product to keep them.',
+      uploadInvalidType: 'Unsupported format. Use JPG, PNG or WEBP.',
+      uploadTooLarge: 'This image is too large.',
+      uploadStatePreparing: 'Preparing...',
+      uploadStateUploading: 'Uploading...',
+      uploadStateUploaded: 'Uploaded',
+      uploadStateFailed: 'Failed — Retry',
+      uploadRetry: 'Retry',
       validationName: 'Product name is required.',
       validationShort: 'Short description is required.',
       validationDesc: 'Description is required.',
@@ -305,7 +312,7 @@ export const translations = {
         shortDescHint: 'Optional — uses the product name if left empty',
         desc: 'Description',
         descHint: 'Optional longer description for the product page',
-        price: 'Price (USD)',
+        price: 'Price (FCFA)',
         category: 'Category',
         stockQty: 'Stock quantity',
         lowStockThresh: 'Low stock alert (advanced)',
@@ -336,8 +343,12 @@ export const translations = {
         cancel: 'Cancel',
         save: 'Save product',
         saving: 'Saving…',
+        saveBlockedUploading: 'Photos are still uploading...',
+        saveBlockedFailed: 'Some photos failed. Retry them or continue without those photos.',
+        failedPhotosHint: 'One or more photos failed to upload.',
+        continueWithoutFailed: 'Continue without failed photos',
         errorImage: 'Please add at least one product photo.',
-        photosHint: 'Add clear product photos. The first image is the cover. You can reorder photos.'
+        photosHint: 'Add clear product photos. The first image will be the cover.'
       },
       
       drawer: {
@@ -600,6 +611,13 @@ export const translations = {
       uploadError: 'Échec du téléversement. Veuillez réessayer.',
       uploadProgress: 'Téléversement des images…',
       uploadSuccess: 'Photos ajoutées. Cliquez sur Enregistrer pour les conserver.',
+      uploadInvalidType: 'Format non pris en charge. Utilisez JPG, PNG ou WEBP.',
+      uploadTooLarge: 'Cette image est trop volumineuse.',
+      uploadStatePreparing: 'Préparation...',
+      uploadStateUploading: 'Téléversement...',
+      uploadStateUploaded: 'Téléversée',
+      uploadStateFailed: 'Échec — Réessayer',
+      uploadRetry: 'Réessayer',
       validationName: 'Le nom du produit est requis.',
       validationShort: 'La description courte est requise.',
       validationDesc: 'La description est requise.',
@@ -665,7 +683,7 @@ export const translations = {
         shortDescHint: 'Optionnel — utilise le nom du produit si vide',
         desc: 'Description',
         descHint: 'Description longue optionnelle pour la page produit',
-        price: 'Prix (USD)',
+        price: 'Prix (FCFA)',
         category: 'Catégorie',
         stockQty: 'Quantité en stock',
         lowStockThresh: 'Alerte stock faible (avancé)',
@@ -696,8 +714,12 @@ export const translations = {
         cancel: 'Annuler',
         save: 'Enregistrer le produit',
         saving: 'Enregistrement…',
+        saveBlockedUploading: 'Téléversement des photos en cours...',
+        saveBlockedFailed: 'Certaines photos ont échoué. Réessayez ou continuez sans ces photos.',
+        failedPhotosHint: 'Une ou plusieurs photos n\'ont pas pu être téléversées.',
+        continueWithoutFailed: 'Continuer sans les photos en échec',
         errorImage: 'Ajoutez au moins une photo du produit.',
-        photosHint: 'Ajoutez des photos nettes. La première image est la couverture. Vous pouvez réordonner.'
+        photosHint: 'Ajoutez des photos nettes. La première image sera la couverture.'
       },
       
       drawer: {
