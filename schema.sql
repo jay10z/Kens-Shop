@@ -6,6 +6,7 @@
 --   4) phase4_categories_migration.sql
 --   5) phase5_products_columns_migration.sql  (colors/models/short_description/etc.)
 --   6) phase7_order_items_product_name_migration.sql  (order_items.product_name snapshot)
+--   7) phase7_6_hero_category_destination_migration.sql  (hero_slides.category_id)
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS hero_slides (
   subtitle TEXT,
   cta_label TEXT,
   cta_href TEXT DEFAULT '/shop',
+  category_id UUID REFERENCES categories(id) ON DELETE SET NULL ON UPDATE CASCADE,
   display_order INTEGER NOT NULL DEFAULT 0 CHECK (display_order >= 0),
   enabled BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
@@ -121,6 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_product_events_created_at ON product_events(creat
 CREATE INDEX IF NOT EXISTS idx_product_events_type_created_at ON product_events(event_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_hero_slides_display_order ON hero_slides(display_order);
 CREATE INDEX IF NOT EXISTS idx_hero_slides_enabled ON hero_slides(enabled);
+CREATE INDEX IF NOT EXISTS idx_hero_slides_category_id ON hero_slides(category_id);
 
 -- Note: Product image uploads require a PUBLIC Supabase Storage bucket named
 -- exactly `product-images` (see api/upload.js). The upload API can create it

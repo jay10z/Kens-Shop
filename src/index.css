@@ -403,33 +403,76 @@ a.bag b {
   height: 430px; background: var(--bg-alt);
   position: relative; overflow: hidden;
 }
-.product-image img, .product-image .img-ph { height: 100%; width: 100%; object-fit: cover; transition: transform .7s ease; }
+.product-image img, .product-image .img-ph {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+  transition: transform .7s ease;
+}
 .product-image:hover img { transform: scale(1.035); }
-.product-image span {
-  position: absolute; left: 14px; top: 14px;
-  background: var(--bg); padding: 7px 10px;
-  font-size: 9px; text-transform: uppercase; letter-spacing: .16em;
-  color: var(--fg);
+/* Scoped badge only — never use generic `.product-image span` here.
+   That old rule set left/top + light background and, combined with
+   right/bottom on the badge, stretched a blank overlay over the photo. */
+.product-image .inventory-badge {
+  position: absolute;
+  left: auto;
+  top: auto;
+  right: 12px;
+  bottom: 12px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  background: rgba(18, 18, 16, 0.86);
+  color: #f5f1e8;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 4px;
+  letter-spacing: .04em;
+  text-transform: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 1px 2px rgba(0,0,0,.22);
+  z-index: 2;
+  pointer-events: none;
 }
-.inventory-badge {
-  position: absolute; right: 12px; bottom: 12px;
-  background: rgba(0,0,0,0.82);
-  color: #fff;
-  font-size: 10px; padding: 5px 9px;
-  border-radius: 4px; letter-spacing: .03em;
-  backdrop-filter: blur(4px);
+[data-theme="light"] .product-image .inventory-badge {
+  background: rgba(18, 18, 16, 0.88);
+  color: #f7f3ea;
 }
-.inventory-badge.tone-ok { box-shadow: inset 0 0 0 1px rgba(90,180,130,.35); }
-.inventory-badge.tone-low { box-shadow: inset 0 0 0 1px rgba(210,170,70,.4); }
-.inventory-badge.tone-out { box-shadow: inset 0 0 0 1px rgba(200,90,90,.4); }
+[data-theme="dark"] .product-image .inventory-badge {
+  background: rgba(8, 8, 7, 0.9);
+  color: #f3efe6;
+}
+.product-image .inventory-badge.tone-ok { box-shadow: inset 0 0 0 1px rgba(90,180,130,.4), 0 1px 2px rgba(0,0,0,.22); }
+.product-image .inventory-badge.tone-low { box-shadow: inset 0 0 0 1px rgba(210,170,70,.45), 0 1px 2px rgba(0,0,0,.22); }
+.product-image .inventory-badge.tone-out { box-shadow: inset 0 0 0 1px rgba(200,90,90,.45), 0 1px 2px rgba(0,0,0,.22); }
 .product-card > div { padding: 22px 3px; }
 .product-card { display: flex; flex-direction: column; min-width: 0; }
 .product-card > div { display: flex; flex: 1; flex-direction: column; }
-.product-card h3 { font: 24px Italiana; margin: 8px 0; color: var(--fg); }
-.product-card > div > p:not(.eyebrow) { color: var(--fg-muted); font-size: 13px; height: 38px; }
+.product-card h3 { font: 24px Italiana; margin: 8px 0 6px; color: var(--fg); }
+.product-card .product-short {
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  margin: 0 0 4px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  min-height: 0;
+}
 .product-row {
   display: flex; justify-content: space-between; align-items: center;
-  margin-top: auto; padding-top: 22px;
+  margin-top: auto; padding-top: 18px;
 }
 .product-row strong { font-weight: 500; color: var(--fg); }
 .product-row button { border: 0; background: none; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gold); }
@@ -546,9 +589,19 @@ a.bag b {
 .product-detail { display: grid; grid-template-columns: 1.3fr 1fr; gap: 7vw; padding: 70px 5vw 110px; background: var(--bg); }
 .product-detail .gallery img { width: 100%; max-height: 650px; object-fit: cover; background: var(--bg-alt); }
 .product-detail .info { padding-top: 30px; }
-.product-detail .info h1 { font: clamp(48px,5vw,72px)/1 Italiana; margin: 18px 0; color: var(--fg); }
+.product-detail .info h1 { font: clamp(48px,5vw,72px)/1 Italiana; margin: 18px 0 10px; color: var(--fg); }
+.product-detail .detail-short {
+  color: var(--fg-muted);
+  font-size: clamp(15px, 1.5vw, 18px);
+  font-weight: 400;
+  line-height: 1.55;
+  margin: 0 0 8px;
+  max-width: 36rem;
+}
 .product-detail .price { font-size: 22px; margin: 16px 0; color: var(--fg); }
-.product-detail .desc { color: var(--fg-muted); line-height: 1.9; margin: 24px 0; }
+.product-detail .detail-description { margin: 28px 0 8px; }
+.product-detail .detail-description .eyebrow { margin-bottom: 10px; }
+.product-detail .desc { color: var(--fg-muted); line-height: 1.9; margin: 0; white-space: pre-line; }
 .product-detail .meta { display: flex; gap: 24px; margin-top: 20px; flex-wrap: wrap; }
 .product-detail .meta span { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
 .product-detail .meta svg { width: 15px; color: var(--gold); }
@@ -605,6 +658,32 @@ a.bag b {
 .empty { text-align: center; padding: 80px 20px; color: var(--fg-muted); }
 .empty > svg { width: 40px; height: 40px; color: var(--gold); margin: auto; }
 .empty h3 { font: 30px Italiana; margin: 20px; color: var(--fg); }
+.cart-wa-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+  max-width: 28rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+.cart-wa-fallback .fine { margin: 0; }
+.cart-wa-fallback .btn { min-width: min(100%, 280px); justify-content: center; }
+.text-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--gold);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cart-wa-fallback .text-link {
+  display: inline-block;
+  margin-top: 4px;
+}
 .error { color: #c0392b !important; font-size: 12px; }
 .float-wa {
   position: fixed; right: 24px; bottom: 24px;
@@ -1075,7 +1154,7 @@ footer small { grid-column: 1/-1; border-top: 1px solid #292926; padding-top: 25
   .product-card h3 { font-size: 19px; }
   .product-card > div { padding: 15px 2px; }
   .product-card .eyebrow { font-size: 8px; }
-  .product-card > div > p:not(.eyebrow) { display: none; }
+  .product-card .product-short { font-size: 12px; -webkit-line-clamp: 2; line-clamp: 2; }
   .product-row { display: block; }
   .product-row button { margin-top: 12px; }
   .section-head h2 { font-size: 42px; }

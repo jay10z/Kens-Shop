@@ -5,6 +5,16 @@ import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, 
 import { BRAND, SOCIAL, whatsappUrl, isExternalHref, categoryImageUrl, DEFAULT_HERO_ASSETS } from './lib/brand';
 import { money } from './lib/money';
 import { prepareImageForUpload, validateImageFile, UPLOAD_TIMEOUT_MS } from './lib/imageUpload';
+import { productCoverImage } from './lib/productImage';
+import { resolveHeroCta, heroShopHref, categoryDestinationKey } from './lib/heroDestination';
+import {
+  buildWhatsAppOrderLink,
+  buildWhatsAppOrderMessage,
+  clearWhatsAppFallback,
+  navigateToWhatsApp,
+  readWhatsAppFallback,
+  storeWhatsAppFallback,
+} from './lib/whatsappOrder';
 import { I18nProvider, useI18n } from './i18n/Context';
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
@@ -100,14 +110,25 @@ function Toast({text,onClose,tone='ok'}:{text:string;onClose:()=>void;tone?:'ok'
     {tone==='err'?<X size={16}/>:tone==='info'?<Loader2 size={16} className="spin"/>:<Check size={16}/>}{text}
   </motion.div>;
 }
-function ProductImage({src,alt,className=''}:{src?:string;alt:string;className?:string}){
-  const [failed,setFailed]=useState(!src);
+function ProductImage({src,alt,className='',loading='lazy'}:{src?:string;alt:string;className?:string;loading?:'lazy'|'eager'}){
+  const url=(typeof src==='string'?src:'').trim();
+  const [failed,setFailed]=useState(false);
   const {t}=useI18n();
-  useEffect(()=>{setFailed(!src)},[src]);
-  if(!src||failed){
+  useEffect(()=>{setFailed(false)},[url]);
+  if(!url||failed){
     return <div className={`img-ph ${className}`} role="img" aria-label={alt||t('common.imageUnavailable')}><ImageIcon size={28}/></div>;
   }
-  return <img src={src} alt={alt} className={className} loading="lazy" onError={()=>setFailed(true)}/>;
+  return (
+    <img
+      key={url}
+      src={url}
+      alt={alt}
+      className={className}
+      loading={loading}
+      decoding="async"
+      onError={()=>setFailed(true)}
+    />
+  );
 }
 function BrandMark({className='',to='/'}:{className?:string;to?:string}){
   const slogan=(BRAND.slogan||'').trim();
@@ -190,15 +211,22 @@ function Layout({children}:{children:React.ReactNode}){
   const {t}=useI18n();
   return <><Header/><main>{children}</main><Footer/><a className="float-wa" href={whatsappUrl()} target="_blank" rel="noopener noreferrer" aria-label={t('footer.whatsapp')}><MessageCircle/></a></>;
 }
-function buildDefaultHeroSlides(t:(key:string)=>any){
-  return DEFAULT_HERO_ASSETS.map(asset=>({
-    ...asset,
-    title:t(`home.heroDefaults.${asset.key}.title`),
-    subtitle:t(`home.heroDefaults.${asset.key}.subtitle`),
-    cta_label:t(`home.heroDefaults.${asset.key}.cta`),
-  }));
+function buildDefaultHeroSlides(t:(key:string)=>any, categories:any[]=[]){
+  const byKey=(key:string)=>categories.find((c:any)=>categoryDestinationKey(c)===key);
+  return DEFAULT_HERO_ASSETS.map(asset=>{
+    const destKey=asset.key==='2'?'watches':asset.key==='3'?'perfumes':null;
+    const cat=destKey?byKey(destKey):null;
+    return {
+      ...asset,
+      category_id:cat?.id||null,
+      cta_href:cat?heroShopHref(cat.id):'/shop',
+      title:t(`home.heroDefaults.${asset.key}.title`),
+      subtitle:t(`home.heroDefaults.${asset.key}.subtitle`),
+      cta_label:destKey?t(`home.heroCta.${destKey}`):t('home.heroCta.shop'),
+    };
+  });
 }
-function HeroSlider(){
+function HeroSlider({categories=[]}:{categories?:any[]}){
   const [slides,setSlides]=useState<any[]>([]);
   const [mode,setMode]=useState<'loading'|'ready'|'fallback'|'empty'>('loading');
   const [index,setIndex]=useState(0);
@@ -222,7 +250,7 @@ function HeroSlider(){
     }).catch(()=>{
       if(cancelled)return;
       try{
-        setSlides(buildDefaultHeroSlides(t));
+        setSlides(buildDefaultHeroSlides(t,categories));
         setIndex(0);
         setMode('fallback');
       }catch{
@@ -234,8 +262,8 @@ function HeroSlider(){
   },[]);
 
   useEffect(()=>{
-    if(mode==='fallback')setSlides(buildDefaultHeroSlides(t));
-  },[lang,mode,t]);
+    if(mode==='fallback')setSlides(buildDefaultHeroSlides(t,categories));
+  },[lang,mode,t,categories]);
 
   useEffect(()=>{
     if(paused||slides.length<=1||mode==='empty'||mode==='loading')return;
@@ -250,7 +278,7 @@ function HeroSlider(){
         <p className="eyebrow gold">{BRAND.fullName}</p>
         <h1>{t('home.heroEmptyTitle')}</h1>
         <p className="hero-sub">{t('home.heroEmptySub')}</p>
-        <Link className="btn gold-btn" to="/shop">{t('home.exploreBtn')} <ArrowRight/></Link>
+        <Link className="btn gold-btn" to="/shop">{t('home.heroCta.shop')} <ArrowRight/></Link>
       </div>
     </section>;
   }
@@ -258,6 +286,7 @@ function HeroSlider(){
   const go=(dir:number)=>setIndex(i=>(i+dir+slides.length)%slides.length);
   const slide=slides[index]||slides[0];
   if(!slide)return null;
+  const cta=resolveHeroCta(slide,categories,t);
 
   return (
     <section
@@ -290,9 +319,9 @@ function HeroSlider(){
         <p className="eyebrow gold">{BRAND.fullName}</p>
         {slide.title?<motion.h1 key={`t-${slide.id||index}`} initial={{opacity:0,y:18}} animate={{opacity:1,y:0}} transition={{delay:0.15}}>{slide.title}</motion.h1>:null}
         {slide.subtitle?<motion.p key={`s-${slide.id||index}`} className="hero-sub" initial={{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{delay:0.25}}>{slide.subtitle}</motion.p>:null}
-        {(slide.cta_label||slide.cta_href)?(
-          <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.35}}>
-            <SmartLink className="btn gold-btn" to={slide.cta_href||'/shop'}>{slide.cta_label||t('home.exploreBtn')} <ArrowRight/></SmartLink>
+        {(cta.label||cta.href)?(
+          <motion.div key={`c-${slide.id||index}-${lang}`} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.35}}>
+            <SmartLink className="btn gold-btn" to={cta.href}>{cta.label} <ArrowRight/></SmartLink>
           </motion.div>
         ):null}
       </div>
@@ -336,18 +365,20 @@ function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
   const {add}=useCart();
   const {t}=useI18n();
   const level=resolveStockPriority(p);
+  const rawShort=(p.short_description||'').trim();
+  const short=rawShort && rawShort.toLowerCase()!==String(p.name||'').trim().toLowerCase() ? rawShort : '';
   const trackCart = () => {
     api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);
   };
   return <article className="product-card">
     <Link to={`/product/${p.slug}`} className="product-image">
-      <ProductImage src={p.images?.[0]} alt={p.name}/>
+      <ProductImage src={productCoverImage(p.images)} alt={p.name} loading="eager"/>
       <InventoryBadge p={p}/>
     </Link>
     <div>
       <p className="eyebrow">{p.category?.name||BRAND.fullName}</p>
       <Link to={`/product/${p.slug}`}><h3>{p.name}</h3></Link>
-      <p>{p.short_description}</p>
+      {short?<p className="product-short">{short}</p>:null}
       <div className="product-row">
         <strong>{money(p.price)}</strong>
         <button type="button" onClick={()=>{add(p);trackCart();onAdded?.()}} disabled={level===3} aria-label={t('product.addToCart')}><Plus/> {t('product.addBtn')}</button>
@@ -382,7 +413,7 @@ function Home(){
   const arrivals=products.filter(p=>p.isNewArrival).slice(0,4);
   
   return <Layout>
-    <HeroSlider/>
+    <HeroSlider categories={cats}/>
     {loading?<Loading/>:error?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:<>
       <CategoryStrip cats={cats}/>
       {featured.length>0&&<ProductSection title={t('home.featuredTitle')} subtitle={t('home.featuredSub')} products={featured} onAdded={()=>setToast(t('home.addedToBag'))}/>}
@@ -550,6 +581,9 @@ function ProductDetail(){
   if(loading)return <Layout><Loading/></Layout>;
   if(error||!p)return <Layout><Empty text={error||t('product.notFound')} action={<Link className="btn dark-btn" to="/shop">{t('product.backToShop')}</Link>}/></Layout>;
   const level=resolveStockPriority(p);
+  const rawShort=(p.short_description||'').trim();
+  const short=rawShort && rawShort.toLowerCase()!==String(p.name||'').trim().toLowerCase() ? rawShort : '';
+  const longDesc=(p.description||'').trim();
   
   return <Layout>
     <div className="product-detail">
@@ -558,16 +592,22 @@ function ProductDetail(){
         <Link to="/shop" className="back-link"><ChevronLeft/> {t('product.backToShop')}</Link>
         <p className="eyebrow gold">{p.category?.name||BRAND.fullName}</p>
         <h1>{p.name}</h1>
+        {short?<p className="product-short detail-short">{short}</p>:null}
         <p className="price">{money(p.price)}</p>
         <p className={`inventory-status tone-${level===1?'ok':level===2?'low':'out'}`}>
           {level===1?t('product.inStock'):level===2?t('product.limitedStock'):t('product.outOfStock')}
         </p>
-        <p className="desc">{p.description}</p>
         {(p.colors?.length>0||p.models?.length>0)&&<div className="options">
           {p.colors?.length>0&&<div><span id="opt-color">{t('product.color')}</span><div role="group" aria-labelledby="opt-color">{p.colors.map(c=><button type="button" key={c} className={`opt ${color===c?'active':''}`} onClick={()=>setColor(c)} aria-pressed={color===c}>{c}</button>)}</div></div>}
           {p.models?.length>0&&<div><span id="opt-model">{t('product.model')}</span><div role="group" aria-labelledby="opt-model">{p.models.map(m=><button type="button" key={m} className={`opt ${model===m?'active':''}`} onClick={()=>setModel(m)} aria-pressed={model===m}>{m}</button>)}</div></div>}
         </div>}
         <button type="button" className="btn gold-btn" onClick={()=>{add(p,1,color,model);setToast(t('home.addedToBag'));api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);}} disabled={level===3}>{level===3?t('product.outOfStock'):t('product.addToCart')}</button>
+        {longDesc?(
+          <div className="detail-description">
+            <p className="eyebrow">{t('product.descriptionTitle')}</p>
+            <p className="desc">{longDesc}</p>
+          </div>
+        ):null}
         <div className="meta"><span><Truck/> {t('product.assurance')}</span><span><Package/> {t('product.packaging')}</span></div>
       </div>
     </div>
@@ -580,8 +620,18 @@ function Cart(){
   const [ordering,setOrdering]=useState(false);
   const [toast,setToast]=useState<{text:string;tone:'ok'|'err'|'info'}|null>(null);
   const [error,setError]=useState('');
+  const [waLink,setWaLink]=useState('');
+  const [reservedOrder,setReservedOrder]=useState('');
   const {t,lang}=useI18n();
   const {user}=useAuth();
+
+  useEffect(()=>{
+    const saved=readWhatsAppFallback();
+    if(saved){
+      setWaLink(saved.url);
+      setReservedOrder(saved.orderNumber);
+    }
+  },[]);
 
   const friendlyOrderError=(err:any)=>{
     const m=String(err?.message||err||'');
@@ -595,54 +645,86 @@ function Cart(){
 
   const order=async()=>{
     if(ordering||!items.length)return;
-    setOrdering(true);setError('');setToast({text:t('cart.ordering'),tone:'info'});
+    setOrdering(true);setError('');
+    setToast({text:t('cart.ordering'),tone:'info'});
     try{
-      const payload={
-        items:items.map((x:any)=>({
-          product_id:x.product.id,
-          product_name:x.product.name,
-          price:x.product.price,
+      const snapshot=items.map((x:any)=>({
+        product_id:x.product.id,
+        product_name:x.product.name,
+        price:x.product.price,
+        quantity:x.quantity,
+        color:x.color,
+        model:x.model,
+        line:{
+          name:x.product.name,
           quantity:x.quantity,
+          unitPrice:x.product.price,
           color:x.color,
           model:x.model,
-        })),
+        },
+      }));
+      const payload={
+        items:snapshot.map(({line:_drop,...item})=>item),
         total,
       };
       const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(!d?.order_number)throw new Error(t('cart.orderError'));
 
-      const lines=items.map((x:any)=>{
-        const meta=[x.color,x.model].filter(Boolean).join(' · ');
-        const label=meta?`${x.product.name} (${meta})`:x.product.name;
-        return `• ${label} × ${x.quantity} — ${money(x.product.price)}`;
-      }).join('\n');
+      const message=buildWhatsAppOrderMessage({
+        orderNumber:d.order_number,
+        lines:snapshot.map((x)=>x.line),
+        total,
+        storeName:BRAND.fullName,
+        formatMoney:money,
+        messageTemplate:(orderNumber,lines,orderTotal,storeName)=>
+          String(t('cart.whatsappMessage',orderNumber,lines,orderTotal,storeName)),
+        customerName:String(user?.user_metadata?.full_name||user?.user_metadata?.name||''),
+        customerEmail:String(user?.email||''),
+        lang,
+      });
 
-      let text=String(t('cart.whatsappMessage', d.order_number, lines, money(total), BRAND.fullName));
-      const customerName=String(user?.user_metadata?.full_name||user?.user_metadata?.name||'').trim();
-      const customerEmail=String(user?.email||'').trim();
-      if(customerName||customerEmail){
-        const bits=[customerName,customerEmail].filter(Boolean).join(' · ');
-        text+=lang==='fr'?`\n\nClient : ${bits}`:`\n\nCustomer: ${bits}`;
-      }
-      const wa=whatsappUrl(text);
-      setToast({text:t('cart.openingWhatsApp'),tone:'ok'});
+      const wa=buildWhatsAppOrderLink(message);
+      if(!wa)throw new Error(t('cart.orderError'));
+
+      storeWhatsAppFallback({url:wa,orderNumber:d.order_number,ts:Date.now()});
       clear();
+
+      // Navigate immediately — no React state updates before this (mobile-safe).
+      navigateToWhatsApp(wa);
+
+      // If navigation is blocked, show same-page fallback with the exact prefilled link.
       window.setTimeout(()=>{
-        const opened=window.open(wa,'_blank','noopener,noreferrer');
-        if(!opened){
-          setError(t('cart.whatsappOpenError'));
-          setToast({text:t('cart.whatsappOpenError'),tone:'err'});
-        }
-      },450);
+        setWaLink(wa);
+        setReservedOrder(d.order_number);
+        setToast({text:t('cart.whatsappOpenError'),tone:'info'});
+        setOrdering(false);
+      },1200);
+      return;
     }catch(e:any){
       console.error('[cart order]',e);
       const msg=friendlyOrderError(e);
       setError(msg);
       setToast({text:msg,tone:'err'});
-    }finally{setOrdering(false)}
+      setOrdering(false);
+    }
   };
 
-  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={x.product.images?.[0]} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={t('cart.emptyText')} action={<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
+  const openWhatsAppFallback=()=>{
+    if(!waLink)return;
+    navigateToWhatsApp(waLink);
+  };
+
+  const emptyAction=waLink?(
+    <div className="cart-wa-fallback">
+      {reservedOrder?<p className="fine">{t('cart.orderReserved', reservedOrder)}</p>:null}
+      <p className="fine">{t('cart.whatsappOpenError')}</p>
+      <a className="btn gold-btn" href={waLink} onClick={(e)=>{e.preventDefault();openWhatsAppFallback();}} rel="noopener noreferrer"><MessageCircle/> {t('cart.openWhatsAppFallback')}</a>
+      <button type="button" className="btn dark-btn" onClick={()=>{clearWhatsAppFallback();setWaLink('');setReservedOrder('');}}>{t('cart.dismissWhatsAppFallback')}</button>
+      <Link className="text-link" to="/shop">{t('cart.emptyBtn')}</Link>
+    </div>
+  ):<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>;
+
+  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={productCoverImage(x.product.images)} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={waLink?t('cart.orderSentTitle'):t('cart.emptyText')} action={emptyAction}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
 }
 function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty" role="status"><Gem aria-hidden="true"/><h3>{text}</h3>{action}</div>}
 function useAdminNoIndex(){useEffect(()=>{const meta=document.createElement('meta');meta.name='robots';meta.content='noindex, nofollow, noarchive';document.head.appendChild(meta);const oldTitle=document.title;document.title='Private Portal';return()=>{meta.remove();document.title=oldTitle}},[])}
@@ -794,7 +876,7 @@ function AdminProducts(){
     <div className="admin-title"><div><p className="eyebrow gold">{t('admin.productsEyebrow')}</p><h1>{t('admin.productsTitle')}</h1></div><button type="button" className="btn gold-btn" onClick={()=>setEditing({})}><Plus/> {t('admin.addProduct')}</button></div>
     <label className="admin-search"><Search aria-hidden="true"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchProduct')} aria-label={t('admin.searchProduct')}/></label>
     {loading?<Loading/>:error&&!products.length?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:(
-      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{products.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())).map(p=><tr key={p.id}><td><div className="table-product"><ProductImage src={p.images?.[0]} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{products.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())).map(p=><tr key={p.id}><td><div className="table-product"><ProductImage src={productCoverImage(p.images)} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td></tr>)}</tbody></table></div>
     )}
     {editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>{setEditing(null);setError('')}} done={()=>{setEditing(null);setToast(t('admin.productSaved'));load()}} error={error} setError={setError}/>}
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
@@ -971,7 +1053,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     if(v){setError(v);return}
     setSaving(true);setError('');
     try{
-      const short=form.short_description.trim()||form.name.trim();
+      const short=form.short_description.trim();
       await api('/api/products',{method:item.id?'PUT':'POST',headers:authHeaders(token),body:JSON.stringify({
         id:item.id,
         name:form.name.trim(),
@@ -1018,7 +1100,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
           <h3>{t('admin.modal.sectionInfo')}</h3>
           <div className="form-grid">
             <label className="full">{t('admin.modal.name')}<input value={form.name} onChange={e=>set('name',e.target.value)} required maxLength={120} autoFocus/></label>
-            <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} maxLength={180} placeholder={t('admin.modal.shortDescHint')}/></label>
+            <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} maxLength={180} placeholder={t('admin.modal.shortDescPlaceholder')}/><small className="field-hint">{t('admin.modal.shortDescHelp')}</small></label>
             <label className="full">{t('admin.modal.desc')}<textarea value={form.description} onChange={e=>set('description',e.target.value)} rows={3} placeholder={t('admin.modal.descHint')}/></label>
             <label>{t('admin.modal.category')}<select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
             <label>{t('admin.modal.price')}<input type="number" min="0" step="1" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
@@ -1122,6 +1204,7 @@ const statuses=['Pending','Discussing on WhatsApp','Confirmed','Preparing','Out 
 function Status({status}:{status:string}){return <span className={`status s-${status.toLowerCase().replaceAll(' ','-')}`}>{status}</span>}
 function AdminHero(){
   const [slides,setSlides]=useState<any[]>([]);
+  const [cats,setCats]=useState<any[]>([]);
   const [editing,setEditing]=useState<any|null>(null);
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
@@ -1129,11 +1212,51 @@ function AdminHero(){
   const [toast,setToast]=useState('');
   const {session}=useAuth();
   const {t}=useI18n();
+
+  const destinationValue=(slide:any)=>{
+    if(slide?.category_id)return String(slide.category_id);
+    if(slide?.cta_href && isExternalHref(slide.cta_href))return '__external__';
+    return 'shop';
+  };
+
+  const suggestedLabel=(categoryId:string)=>{
+    if(!categoryId||categoryId==='shop')return t('home.heroCta.shop');
+    if(categoryId==='__external__')return '';
+    const cat=cats.find((c:any)=>String(c.id)===categoryId);
+    const key=categoryDestinationKey(cat);
+    return key?t(`home.heroCta.${key}`):t('home.heroCta.shop');
+  };
+
+  const applyDestination=(value:string)=>{
+    setEditing((prev:any)=>{
+      if(!prev)return prev;
+      if(value==='shop'){
+        return {...prev,category_id:null,cta_href:'/shop',cta_label:prev.cta_label||t('home.heroCta.shop')};
+      }
+      if(value==='__external__'){
+        return {...prev,category_id:null,cta_href:isExternalHref(prev.cta_href)?prev.cta_href:'https://'};
+      }
+      return {
+        ...prev,
+        category_id:value,
+        cta_href:heroShopHref(value),
+        cta_label:prev.cta_label||suggestedLabel(value),
+      };
+    });
+  };
+
   const load=()=>{
     if(!session?.access_token){setLoading(false);setError(t('admin.dashboardAuthError'));return;}
     setLoading(true);
-    api('/api/hero?admin=true',{headers:authHeaders(session.access_token)})
-      .then((data)=>{setSlides(Array.isArray(data)?data:[]);setError('')})
+    Promise.all([
+      api('/api/hero?admin=true',{headers:authHeaders(session.access_token)}),
+      api('/api/categories'),
+    ])
+      .then(([data,categories])=>{
+        setSlides(Array.isArray(data)?data:[]);
+        setCats(Array.isArray(categories)?categories:[]);
+        setError('');
+      })
       .catch((e:any)=>setError(e.message||t('admin.heroEmpty')))
       .finally(()=>setLoading(false));
   };
@@ -1175,11 +1298,13 @@ function AdminHero(){
     setBusy(true);setError('');
     try{
       const isNew=!editing.id;
+      const category_id=editing.category_id||null;
       const payload={
         title:editing.title||null,
         subtitle:editing.subtitle||null,
         cta_label:editing.cta_label||null,
-        cta_href:editing.cta_href||'/shop',
+        category_id,
+        cta_href:category_id?heroShopHref(category_id):(editing.cta_href||'/shop'),
         display_order:Number(editing.display_order)||1,
         enabled:editing.enabled!==false,
         image_url:editing.image_url,
@@ -1226,10 +1351,25 @@ function AdminHero(){
     }catch(e:any){setError(e.message)}
   };
 
+  const destLabel=(slide:any)=>{
+    if(slide.category_id){
+      const cat=cats.find((c:any)=>String(c.id)===String(slide.category_id));
+      const key=categoryDestinationKey(cat);
+      return (key?t(`admin.categoryNames.${key}`):'')||cat?.name||t('admin.heroDestination');
+    }
+    if(slide.cta_href && isExternalHref(slide.cta_href))return t('admin.heroDestinationExternal');
+    return t('admin.heroDestinationAll');
+  };
+
+  const categoryOptionLabel=(c:any)=>{
+    const key=categoryDestinationKey(c);
+    return (key?t(`admin.categoryNames.${key}`):'')||c.name;
+  };
+
   return <AdminShell><section className="admin-content">
     <div className="admin-title">
       <div><p className="eyebrow gold">{t('admin.heroEyebrow')}</p><h1>{t('admin.heroTitle')}</h1></div>
-      <button type="button" className="btn gold-btn" onClick={()=>setEditing({title:'',subtitle:'',cta_label:t('home.exploreBtn'),cta_href:'/shop',display_order:(slides.length+1),enabled:true,image_url:''})}><Plus/> {t('admin.heroAdd')}</button>
+      <button type="button" className="btn gold-btn" onClick={()=>setEditing({title:'',subtitle:'',cta_label:t('home.heroCta.shop'),cta_href:'/shop',category_id:null,display_order:(slides.length+1),enabled:true,image_url:''})}><Plus/> {t('admin.heroAdd')}</button>
     </div>
     <p className="fine" style={{marginTop:'-1rem',marginBottom:'1.5rem'}}>{t('admin.heroHelp')}</p>
     {error&&!editing&&<p className="error" role="alert">{error}</p>}
@@ -1240,14 +1380,14 @@ function AdminHero(){
           <ProductImage src={s.image_url} alt={s.title||t('admin.heroAlt')}/>
           <div>
             <b>{s.title||t('admin.heroUntitled')}</b>
-            <span>{t('admin.heroOrder')}: {s.display_order} · {s.enabled?t('admin.heroEnabled'):t('admin.heroDisabled')}</span>
+            <span>{t('admin.heroOrder')}: {s.display_order} · {s.enabled?t('admin.heroEnabled'):t('admin.heroDisabled')} · {destLabel(s)}</span>
             <small>{s.subtitle}</small>
           </div>
           <div className="hero-admin-actions">
             <button type="button" onClick={()=>move(i,-1)} aria-label={t('admin.heroMoveUp')} disabled={i===0}><ChevronLeft/></button>
             <button type="button" onClick={()=>move(i,1)} aria-label={t('admin.heroMoveDown')} disabled={i===slides.length-1}><ChevronRight/></button>
             <button type="button" onClick={()=>toggle(s)}>{s.enabled?t('admin.heroDisable'):t('admin.heroEnable')}</button>
-            <button type="button" onClick={()=>{setError('');setEditing(s)}} aria-label={t('common.edit')}><Pencil/></button>
+            <button type="button" onClick={()=>{setError('');setEditing({...s,category_id:s.category_id||null})}} aria-label={t('common.edit')}><Pencil/></button>
             <button type="button" onClick={()=>remove(s.id)} aria-label={t('common.delete')}><Trash2/></button>
           </div>
         </article>
@@ -1260,8 +1400,18 @@ function AdminHero(){
       <div className="form-grid">
         <label className="full">{t('admin.heroTitleField')}<input value={editing.title||''} onChange={e=>setEditing({...editing,title:e.target.value})}/></label>
         <label className="full">{t('admin.heroSubtitle')}<textarea value={editing.subtitle||''} onChange={e=>setEditing({...editing,subtitle:e.target.value})}/></label>
-        <label>{t('admin.heroCtaLabel')}<input value={editing.cta_label||''} onChange={e=>setEditing({...editing,cta_label:e.target.value})}/></label>
-        <label>{t('admin.heroCtaHref')}<input value={editing.cta_href||'/shop'} onChange={e=>setEditing({...editing,cta_href:e.target.value})}/></label>
+        <label className="full">{t('admin.heroDestination')}
+          <select value={destinationValue(editing)} onChange={e=>applyDestination(e.target.value)}>
+            <option value="shop">{t('admin.heroDestinationAll')}</option>
+            {cats.map((c:any)=><option key={c.id} value={c.id}>{categoryOptionLabel(c)}</option>)}
+            {(destinationValue(editing)==='__external__'||(editing.cta_href&&isExternalHref(editing.cta_href)))?<option value="__external__">{t('admin.heroDestinationExternal')}</option>:null}
+          </select>
+          <small className="field-hint">{t('admin.heroDestinationHelp')}</small>
+        </label>
+        <label>{t('admin.heroCtaLabel')}<input value={editing.cta_label||''} onChange={e=>setEditing({...editing,cta_label:e.target.value})} placeholder={suggestedLabel(destinationValue(editing))}/></label>
+        {destinationValue(editing)==='__external__'?(
+          <label>{t('admin.heroCtaHref')}<input value={editing.cta_href||''} onChange={e=>setEditing({...editing,cta_href:e.target.value})}/></label>
+        ):null}
         <label>{t('admin.heroOrder')}<input type="number" min="1" value={editing.display_order??1} onChange={e=>setEditing({...editing,display_order:e.target.value})}/></label>
         <label className="checks"><input type="checkbox" checked={editing.enabled!==false} onChange={e=>setEditing({...editing,enabled:e.target.checked})}/> {t('admin.heroEnabled')}</label>
         <label className="full upload">{t('admin.heroImage')}<input type="file" accept="image/*" onChange={e=>upload(e.target.files)}/><span><Plus/> {busy?t('admin.modal.uploading'):t('admin.heroChooseImage')}</span></label>
@@ -1285,7 +1435,7 @@ function OrderDrawer({order,token,close,done}:any){
   const save=async(status?:string)=>{setBusy(true);await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({...form,status:status||form.status})});setBusy(false);done()};
   const customerWa=(form.whatsapp_number||SOCIAL.whatsappNumber).replace(/\D/g,'');
   const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+form.order_number)}`;
-  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title"><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><ProductImage src={x.product?.images?.[0]} alt=""/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a><button type="button" onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button type="button" onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button type="button" className="danger" onClick={()=>save('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button><button type="button" className="btn dark-btn" onClick={()=>save('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button><button type="button" className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
+  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title"><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><ProductImage src={productCoverImage(x.product?.images)} alt=""/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a><button type="button" onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button type="button" onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button type="button" className="danger" onClick={()=>save('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button><button type="button" className="btn dark-btn" onClick={()=>save('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button><button type="button" className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
 }
 export default function App(){
   return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
