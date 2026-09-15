@@ -25,7 +25,7 @@ export type OrderMessageInput = {
     storeName: string
   ) => string;
   customerName?: string;
-  customerEmail?: string;
+  customerPhone?: string;
   lang?: 'en' | 'fr';
 };
 
@@ -62,9 +62,9 @@ export function buildWhatsAppOrderMessage(input: OrderMessageInput): string {
   );
 
   const name = (input.customerName || '').trim();
-  const email = (input.customerEmail || '').trim();
-  if (name || email) {
-    const bits = [name, email].filter(Boolean).join(' · ');
+  const phone = (input.customerPhone || '').trim();
+  if (name || phone) {
+    const bits = [name, phone].filter(Boolean).join(' · ');
     text += input.lang === 'fr' ? `\n\nClient : ${bits}` : `\n\nCustomer: ${bits}`;
   }
 

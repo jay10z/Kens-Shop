@@ -7,6 +7,8 @@
 --   5) phase5_products_columns_migration.sql  (colors/models/short_description/etc.)
 --   6) phase7_order_items_product_name_migration.sql  (order_items.product_name snapshot)
 --   7) phase7_6_hero_category_destination_migration.sql  (hero_slides.category_id)
+--   8) phase8_customers_orders_migration.sql  (customers + orders.customer_id + status)
+--   9) phase9_target_gender_migration.sql  (products.target_gender: men|women|unisex)
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,6 +36,8 @@ CREATE TABLE IF NOT EXISTS products (
   low_stock_threshold INTEGER NOT NULL DEFAULT 5 CHECK (low_stock_threshold >= 0),
   colors TEXT[] NOT NULL DEFAULT '{}',
   models TEXT[] NOT NULL DEFAULT '{}',
+  -- Audience (separate from category product type). NULL = not yet classified.
+  target_gender TEXT CHECK (target_gender IS NULL OR target_gender IN ('men', 'women', 'unisex')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
@@ -44,6 +48,16 @@ CREATE TABLE IF NOT EXISTS product_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+CREATE TABLE IF NOT EXISTS customers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  full_name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  normalized_phone TEXT NOT NULL UNIQUE,
+  email TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 CREATE TABLE IF NOT EXISTS orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_number TEXT UNIQUE NOT NULL,
@@ -51,14 +65,16 @@ CREATE TABLE IF NOT EXISTS orders (
   status TEXT NOT NULL DEFAULT 'Pending' CHECK (
     status IN (
       'Pending',
-      'Discussing on WhatsApp',
       'Confirmed',
-      'Preparing',
-      'Out for Delivery',
+      'Processing',
       'Delivered',
-      'Cancelled'
+      'Cancelled',
+      'Discussing on WhatsApp',
+      'Preparing',
+      'Out for Delivery'
     )
   ),
+  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL ON UPDATE CASCADE,
   user_email TEXT,
   shipping_address JSONB,
   customer_name TEXT,
@@ -113,9 +129,12 @@ CREATE INDEX IF NOT EXISTS idx_categories_display_order ON categories(display_or
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
 CREATE INDEX IF NOT EXISTS idx_products_hidden ON products(hidden);
 CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
+CREATE INDEX IF NOT EXISTS idx_products_target_gender ON products(target_gender);
 CREATE INDEX IF NOT EXISTS idx_products_display_priority ON products(display_priority);
+CREATE INDEX IF NOT EXISTS idx_customers_created_at ON customers(created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_events_product_id ON product_events(product_id);
@@ -124,6 +143,9 @@ CREATE INDEX IF NOT EXISTS idx_product_events_type_created_at ON product_events(
 CREATE INDEX IF NOT EXISTS idx_hero_slides_display_order ON hero_slides(display_order);
 CREATE INDEX IF NOT EXISTS idx_hero_slides_enabled ON hero_slides(enabled);
 CREATE INDEX IF NOT EXISTS idx_hero_slides_category_id ON hero_slides(category_id);
+
+-- Customer records are admin/API-only (service role bypasses RLS).
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 
 -- Note: Product image uploads require a PUBLIC Supabase Storage bucket named
 -- exactly `product-images` (see api/upload.js). The upload API can create it

@@ -36,6 +36,7 @@ const WRITABLE_COLUMNS = [
   'low_stock_threshold',
   'colors',
   'models',
+  'target_gender',
 ];
 
 /** Never accept manual edits of analytics counters from the admin UI */
@@ -92,12 +93,27 @@ function friendlySchemaError(missing) {
       migrationRequired: true,
     };
   }
+  if (missing === 'target_gender') {
+    return {
+      error: 'Target audience could not be saved. Please run the target_gender migration.',
+      code: 'SCHEMA_AUDIENCE',
+      missingColumn: missing,
+      migrationRequired: true,
+    };
+  }
   return {
     error: 'Product could not be saved. Please try again.',
     code: 'SCHEMA_UNKNOWN',
     missingColumn: missing || undefined,
     migrationRequired: Boolean(missing),
   };
+}
+
+function normalizeTargetGender(value) {
+  if (value == null || value === '') return null;
+  const v = String(value).trim().toLowerCase();
+  if (v === 'men' || v === 'women' || v === 'unisex') return v;
+  return undefined;
 }
 
 function normalizeSpecArray(value) {
@@ -152,6 +168,16 @@ function prepareProductPayload(body, { forInsert = false, name } = {}) {
   if ('featured' in payload) payload.featured = Boolean(payload.featured);
   if ('hidden' in payload) payload.hidden = Boolean(payload.hidden);
   if ('active' in payload) payload.active = Boolean(payload.active);
+
+  if ('target_gender' in payload) {
+    const g = normalizeTargetGender(payload.target_gender);
+    if (g === undefined) {
+      // Invalid value — drop so we do not write garbage; caller validates inserts
+      delete payload.target_gender;
+    } else {
+      payload.target_gender = g;
+    }
+  }
 
   if ('images' in payload) {
     payload.images = Array.isArray(payload.images)
@@ -316,9 +342,17 @@ export default async function handler(req, res) {
       if (!name || !String(name).trim()) {
         return res.status(400).json({ error: 'Product name is required.' });
       }
+      const gender = normalizeTargetGender(req.body?.target_gender);
+      if (!gender) {
+        return res.status(400).json({
+          error: 'Please choose a target audience (men, women, or unisex).',
+          code: 'VALIDATION_AUDIENCE',
+        });
+      }
 
       const payload = prepareProductPayload(req.body, { forInsert: true, name: String(name).trim() });
       payload.name = String(name).trim();
+      payload.target_gender = gender;
 
       const { data, error } = await writeProduct('insert', payload);
       if (error) {
@@ -336,6 +370,18 @@ export default async function handler(req, res) {
     if (req.method === 'PUT') {
       const { id, ...raw } = req.body || {};
       if (!id) return res.status(400).json({ error: 'Product id is required.' });
+
+      // Admin form always sends target_gender; require a valid value when provided
+      if ('target_gender' in raw) {
+        const gender = normalizeTargetGender(raw.target_gender);
+        if (!gender) {
+          return res.status(400).json({
+            error: 'Please choose a target audience (men, women, or unisex).',
+            code: 'VALIDATION_AUDIENCE',
+          });
+        }
+        raw.target_gender = gender;
+      }
 
       const payload = prepareProductPayload(raw, { forInsert: false });
 

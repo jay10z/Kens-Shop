@@ -3,19 +3,20 @@
  * Change brand text / slogan / links here (or via VITE_* env) — not across the app.
  */
 export const BRAND = {
-  /** Primary wordmark — e.g. KEN'S */
-  name: "KEN'S",
-  /** Accent word — e.g. SHOP */
+  /** Primary wordmark — display casing matches client identity */
+  name: "Ken's",
+  /** Accent word — used in catalog/system labels */
   nameAccent: 'SHOP',
-  /** Combined display name */
+  /** Combined display name for storefront system text */
   get fullName() {
-    return `${this.name} ${this.nameAccent}`;
+    return `KEN'S ${this.nameAccent}`;
   },
-  /**
-   * Optional slogan under the logo.
-   * Leave empty to keep the brand mark clean (no extra space).
-   */
-  slogan: '',
+  /** Brand philosophy tagline (client-provided) */
+  slogan: 'Chaque détail compte...',
+  /** Accessible name for the brand lockup */
+  logoAlt: "Ken's — Chaque détail compte",
+  /** Archival client artwork (reference only; UI uses the native brand system) */
+  logoSrc: '/images/kens-logo.png',
 };
 
 const digits = (value: string) => value.replace(/\D/g, '');

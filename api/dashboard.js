@@ -8,6 +8,7 @@ import {
   topTrending,
   topBestSellers,
 } from './ranking.js';
+import { decorateCustomers, summarizeCustomers } from './customerStats.js';
 
 const emptyDashboard = {
   totalProducts: 0,
@@ -18,6 +19,13 @@ const emptyDashboard = {
   pending: 0,
   delivered: 0,
   revenue: 0,
+  totalOrders: 0,
+  totalCustomers: 0,
+  newCustomers: 0,
+  returningCustomers: 0,
+  repeatCustomerRate: 0,
+  averageCustomerSpend: 0,
+  topCustomers: [],
   recent: [],
   trendingProduct: null,
   bestSeller: null,
@@ -133,7 +141,7 @@ export default async function handler(req, res) {
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     // Independent soft queries — one failure must not block the whole dashboard
-    const [pResult, oResult, itemsResult, eventsResult] = await Promise.all([
+    const [pResult, oResult, itemsResult, eventsResult, cResult] = await Promise.all([
       softQuery('products', () => supabase.from('products').select('*')),
       softQuery('orders', () =>
         supabase.from('orders').select('*').order('created_at', { ascending: false })
@@ -145,9 +153,10 @@ export default async function handler(req, res) {
           .select('product_id, event_type')
           .gte('created_at', getTrendingCutoffISO())
       ),
+      softQuery('customers', () => supabase.from('customers').select('*')),
     ]);
 
-    for (const r of [pResult, oResult, itemsResult, eventsResult]) {
+    for (const r of [pResult, oResult, itemsResult, eventsResult, cResult]) {
       if (r.warning) warnings.push(r.warning);
     }
 
@@ -183,6 +192,7 @@ export default async function handler(req, res) {
 
     const today = new Date().toISOString().slice(0, 10);
     const delivered = o.filter((x) => x.status === 'Delivered');
+    const customerSummary = summarizeCustomers(decorateCustomers(cResult.data || [], o));
 
     const criticalFailure = Boolean(pResult.error);
     return res.status(200).json({
@@ -195,6 +205,8 @@ export default async function handler(req, res) {
       pending: o.filter((x) => x.status === 'Pending').length,
       delivered: delivered.length,
       revenue: delivered.reduce((s, x) => s + Number(x.total), 0),
+      totalOrders: o.length,
+      ...customerSummary,
       recent: o.slice(0, 5),
       trendingProduct,
       bestSeller,

@@ -1,5 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Ken's">
-  <!-- Compact K mark — first letter of Ken's, site ink + gold -->
   <rect width="64" height="64" rx="12" fill="#171713"/>
   <path fill="#C9A227" d="M19 15h8v15.2L41.2 15H51L34.6 32.2 51 49H41.2L27 33.6V49h-8V15z"/>
 </svg>

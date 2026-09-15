@@ -1,12 +1,21 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Copy, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, MapPin, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, X } from 'lucide-react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, Users, X } from 'lucide-react';
 import { BRAND, SOCIAL, whatsappUrl, isExternalHref, categoryImageUrl, DEFAULT_HERO_ASSETS } from './lib/brand';
 import { money } from './lib/money';
+import { isValidCameroonPhone, isValidEmail } from './lib/phone';
 import { prepareImageForUpload, validateImageFile, UPLOAD_TIMEOUT_MS } from './lib/imageUpload';
 import { productCoverImage } from './lib/productImage';
-import { resolveHeroCta, heroShopHref, categoryDestinationKey } from './lib/heroDestination';
+import { resolveHeroCopy, heroShopHref, categoryDestinationKey } from './lib/heroDestination';
+import {
+  audienceSearchParams,
+  matchesAudience,
+  normalizeTargetGender,
+  parseAudienceParam,
+  type AudienceFilter,
+  type TargetGender,
+} from './lib/audience';
 import {
   buildWhatsAppOrderLink,
   buildWhatsAppOrderMessage,
@@ -130,15 +139,31 @@ function ProductImage({src,alt,className='',loading='lazy'}:{src?:string;alt:str
     />
   );
 }
-function BrandMark({className='',to='/'}:{className?:string;to?:string}){
-  const slogan=(BRAND.slogan||'').trim();
-  return <Link to={to} className={`brand ${className}${slogan?' has-slogan':''}`} aria-label={BRAND.fullName}>
-    <span className="brand-line">
-      <span className="brand-main">{BRAND.name}</span>
-      <span className="brand-accent">{BRAND.nameAccent}</span>
-    </span>
-    {slogan?<span className="brand-slogan">{slogan}</span>:null}
-  </Link>;
+function BrandMark({
+  className = '',
+  to = '/',
+  compact = false,
+}: {
+  className?: string;
+  to?: string;
+  /** Wordmark only — for very tight UI */
+  compact?: boolean;
+}) {
+  const classes = ['brand', compact ? 'brand-compact' : '', className].filter(Boolean).join(' ');
+  return (
+    <Link to={to} className={classes} aria-label={BRAND.logoAlt}>
+      <span className="brand-lockup">
+        <span className="brand-word" aria-hidden="true">
+          Ken<span className="brand-apos">’</span>s
+        </span>
+        {!compact ? (
+          <span className="brand-tag" aria-hidden="true">
+            {BRAND.slogan}
+          </span>
+        ) : null}
+      </span>
+    </Link>
+  );
 }
 function TikTokIcon({size=18}:{size?:number}){
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.15 15.2a6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.73a8.19 8.19 0 0 0 4.76 1.52V6.84a4.84 4.84 0 0 1-1-.15z"/></svg>;
@@ -226,13 +251,30 @@ function buildDefaultHeroSlides(t:(key:string)=>any, categories:any[]=[]){
     };
   });
 }
+function localizedCategoryName(cat:any,t:(key:string)=>any){
+  const key=categoryDestinationKey(cat);
+  if(!key)return cat?.name||'';
+  const label=t(`shop.categoryNames.${key}`);
+  return label&&label!==`shop.categoryNames.${key}`?label:(cat?.name||'');
+}
 function HeroSlider({categories=[]}:{categories?:any[]}){
   const [slides,setSlides]=useState<any[]>([]);
+  const [cats,setCats]=useState<any[]>(categories);
   const [mode,setMode]=useState<'loading'|'ready'|'fallback'|'empty'>('loading');
   const [index,setIndex]=useState(0);
   const [paused,setPaused]=useState(false);
   const touchX=useRef<number|null>(null);
   const {t,lang}=useI18n();
+
+  useEffect(()=>{if(categories.length)setCats(categories)},[categories]);
+  useEffect(()=>{
+    if(categories.length)return;
+    let cancelled=false;
+    api('/api/categories').then((data)=>{
+      if(!cancelled&&Array.isArray(data))setCats(data);
+    }).catch(()=>{});
+    return()=>{cancelled=true};
+  },[categories.length]);
 
   useEffect(()=>{
     let cancelled=false;
@@ -250,7 +292,7 @@ function HeroSlider({categories=[]}:{categories?:any[]}){
     }).catch(()=>{
       if(cancelled)return;
       try{
-        setSlides(buildDefaultHeroSlides(t,categories));
+        setSlides(buildDefaultHeroSlides(t,cats));
         setIndex(0);
         setMode('fallback');
       }catch{
@@ -262,8 +304,8 @@ function HeroSlider({categories=[]}:{categories?:any[]}){
   },[]);
 
   useEffect(()=>{
-    if(mode==='fallback')setSlides(buildDefaultHeroSlides(t,categories));
-  },[lang,mode,t,categories]);
+    if(mode==='fallback')setSlides(buildDefaultHeroSlides(t,cats));
+  },[lang,mode,t,cats]);
 
   useEffect(()=>{
     if(paused||slides.length<=1||mode==='empty'||mode==='loading')return;
@@ -286,7 +328,7 @@ function HeroSlider({categories=[]}:{categories?:any[]}){
   const go=(dir:number)=>setIndex(i=>(i+dir+slides.length)%slides.length);
   const slide=slides[index]||slides[0];
   if(!slide)return null;
-  const cta=resolveHeroCta(slide,categories,t);
+  const copy=resolveHeroCopy(slide,cats,t);
 
   return (
     <section
@@ -317,11 +359,11 @@ function HeroSlider({categories=[]}:{categories?:any[]}){
       </AnimatePresence>
       <div className="hero-content">
         <p className="eyebrow gold">{BRAND.fullName}</p>
-        {slide.title?<motion.h1 key={`t-${slide.id||index}`} initial={{opacity:0,y:18}} animate={{opacity:1,y:0}} transition={{delay:0.15}}>{slide.title}</motion.h1>:null}
-        {slide.subtitle?<motion.p key={`s-${slide.id||index}`} className="hero-sub" initial={{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{delay:0.25}}>{slide.subtitle}</motion.p>:null}
-        {(cta.label||cta.href)?(
-          <motion.div key={`c-${slide.id||index}-${lang}`} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.35}}>
-            <SmartLink className="btn gold-btn" to={cta.href}>{cta.label} <ArrowRight/></SmartLink>
+        {copy.title?<motion.h1 key={`t-${slide.id||index}-${lang}`} initial={{opacity:0,y:18}} animate={{opacity:1,y:0}} transition={{delay:0.15}}>{copy.title}</motion.h1>:null}
+        {copy.subtitle?<motion.p key={`s-${slide.id||index}-${lang}`} className="hero-sub" initial={{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{delay:0.25}}>{copy.subtitle}</motion.p>:null}
+        {(copy.cta.label||copy.cta.href)?(
+          <motion.div key={`c-${slide.id||index}-${lang}-${copy.cta.href}`} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.35}}>
+            <SmartLink className="btn gold-btn" to={copy.cta.href}>{copy.cta.label} <ArrowRight/></SmartLink>
           </motion.div>
         ):null}
       </div>
@@ -351,15 +393,101 @@ function CategoryStrip({cats}:{cats:any[]}){
     <div className="category-grid">
       {cats.map(c=>(
         <Link key={c.id} to={`/shop?category=${c.id}`} className="category-card">
-          <img src={categoryImageUrl(c)} alt={c.name} loading="lazy"/>
+          <img src={categoryImageUrl(c)} alt={localizedCategoryName(c,t)} loading="lazy"/>
           <div>
             <span className="eyebrow gold">{BRAND.nameAccent}</span>
-            <h3>{c.name}</h3>
+            <h3>{localizedCategoryName(c,t)}</h3>
           </div>
         </Link>
       ))}
     </div>
   </section>;
+}
+
+function AudienceSwitcher({
+  value,
+  onChange,
+  variant='home',
+  labelKey='home.audienceLabel',
+}:{
+  value:AudienceFilter;
+  onChange:(v:AudienceFilter)=>void;
+  variant?:'home'|'shop';
+  labelKey?:string;
+}){
+  const {t}=useI18n();
+  const reduceMotion=useReducedMotion();
+  const options:AudienceFilter[]=['all','men','women'];
+  const refs=useRef<Record<string,HTMLButtonElement|null>>({});
+  const [indicator,setIndicator]=useState({left:0,width:0});
+
+  const measure=()=>{
+    const el=refs.current[value];
+    if(!el)return;
+    setIndicator({left:el.offsetLeft,width:el.offsetWidth});
+  };
+  useEffect(()=>{
+    const id=requestAnimationFrame(()=>measure());
+    return ()=>cancelAnimationFrame(id);
+  },[value]);
+  useEffect(()=>{
+    const onResize=()=>measure();
+    window.addEventListener('resize',onResize);
+    return ()=>window.removeEventListener('resize',onResize);
+  },[value]);
+
+  const label=(key:AudienceFilter)=>{
+    if(key==='all')return t('home.audienceAll');
+    if(key==='men')return t('home.audienceMen');
+    return t('home.audienceWomen');
+  };
+
+  return (
+    <div className={`audience-switch${variant==='shop'?' audience-switch--shop':''}`}>
+      <p className="audience-switch__label" id="audience-switch-label">{t(labelKey)}</p>
+      <div className="audience-switch__track" role="tablist" aria-labelledby="audience-switch-label">
+        {options.map(opt=>(
+          <button
+            key={opt}
+            type="button"
+            role="tab"
+            id={`audience-tab-${opt}`}
+            ref={el=>{refs.current[opt]=el}}
+            className={`audience-switch__option${value===opt?' is-active':''}`}
+            aria-selected={value===opt}
+            tabIndex={value===opt?0:-1}
+            onClick={()=>onChange(opt)}
+            onKeyDown={(e)=>{
+              const i=options.indexOf(opt);
+              if(e.key==='ArrowRight'||e.key==='ArrowDown'){
+                e.preventDefault();
+                onChange(options[(i+1)%options.length]);
+              }else if(e.key==='ArrowLeft'||e.key==='ArrowUp'){
+                e.preventDefault();
+                onChange(options[(i-1+options.length)%options.length]);
+              }else if(e.key==='Home'){e.preventDefault();onChange('all')}
+              else if(e.key==='End'){e.preventDefault();onChange('women')}
+            }}
+          >
+            {label(opt)}
+          </button>
+        ))}
+        <motion.span
+          className="audience-switch__indicator"
+          aria-hidden="true"
+          initial={false}
+          animate={{left:indicator.left,width:indicator.width}}
+          transition={reduceMotion?{duration:0}:{type:'spring',stiffness:380,damping:36}}
+        />
+      </div>
+    </div>
+  );
+}
+
+function audienceEmptyCopy(gender:AudienceFilter,t:(k:string)=>string){
+  if(gender==='men')return t('shop.emptyMen');
+  if(gender==='women')return t('shop.emptyWomen');
+  return t('shop.emptyTitle');
 }
 function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
   const {add}=useCart();
@@ -376,7 +504,7 @@ function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
       <InventoryBadge p={p}/>
     </Link>
     <div>
-      <p className="eyebrow">{p.category?.name||BRAND.fullName}</p>
+      <p className="eyebrow">{localizedCategoryName(p.category,t)||BRAND.fullName}</p>
       <Link to={`/product/${p.slug}`}><h3>{p.name}</h3></Link>
       {short?<p className="product-short">{short}</p>:null}
       <div className="product-row">
@@ -392,7 +520,9 @@ function Home(){
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
   const [toast,setToast]=useState('');
+  const [audience,setAudience]=useState<AudienceFilter>('all');
   const {t}=useI18n();
+  const reduceMotion=useReducedMotion();
   const load=()=>{
     setLoading(true);setError('');
     Promise.all([api('/api/products'),api('/api/categories')])
@@ -401,25 +531,42 @@ function Home(){
       .finally(()=>setLoading(false));
   };
   useEffect(()=>{load()},[]);
-  const featured=products.filter(p=>!!p.featured);
-  const trending=[...products]
+  const scoped=products.filter(p=>matchesAudience(p,audience));
+  const featured=scoped.filter(p=>!!p.featured);
+  const trending=[...scoped]
     .filter(p=>(p.trendingScore||0)>0)
     .sort((a,b)=>b.trendingScore-a.trendingScore||(b.purchase_count||0)-(a.purchase_count||0))
     .slice(0,4);
-  const bestSellers=[...products]
+  const bestSellers=[...scoped]
     .filter(p=>(p.purchase_count||0)>0)
     .sort((a,b)=>(b.purchase_count||0)-(a.purchase_count||0)||(b.trendingScore||0)-(a.trendingScore||0))
     .slice(0,4);
-  const arrivals=products.filter(p=>p.isNewArrival).slice(0,4);
+  const arrivals=scoped.filter(p=>p.isNewArrival).slice(0,4);
+  const shopHref=audience==='all'?'/shop':`/shop?gender=${audience}`;
+  const hasAnySection=featured.length>0||trending.length>0||bestSellers.length>0||arrivals.length>0;
   
   return <Layout>
     <HeroSlider categories={cats}/>
     {loading?<Loading/>:error?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:<>
       <CategoryStrip cats={cats}/>
-      {featured.length>0&&<ProductSection title={t('home.featuredTitle')} subtitle={t('home.featuredSub')} products={featured} onAdded={()=>setToast(t('home.addedToBag'))}/>}
-      {trending.length>0&&<ProductSection title={t('home.trendingTitle')} subtitle={t('home.trendingSub')} products={trending} onAdded={()=>setToast(t('home.addedToBag'))}/>}
-      {bestSellers.length>0&&<ProductSection title={t('home.bestSellersTitle')} subtitle={t('home.bestSellersSub')} products={bestSellers} onAdded={()=>setToast(t('home.addedToBag'))}/>}
-      {arrivals.length>0&&<ProductSection title={t('home.newArrivalsTitle')} subtitle={t('home.newArrivalsSub')} products={arrivals} onAdded={()=>setToast(t('home.addedToBag'))}/>}
+      <AudienceSwitcher value={audience} onChange={setAudience}/>
+      <motion.div
+        key={audience}
+        className="audience-grid-wrap"
+        initial={reduceMotion?false:{opacity:0.55}}
+        animate={{opacity:1}}
+        transition={reduceMotion?{duration:0}:{duration:0.28,ease:'easeOut'}}
+      >
+        {featured.length>0&&<ProductSection title={t('home.featuredTitle')} subtitle={t('home.featuredSub')} products={featured} shopHref={shopHref} onAdded={()=>setToast(t('home.addedToBag'))}/>}
+        {trending.length>0&&<ProductSection title={t('home.trendingTitle')} subtitle={t('home.trendingSub')} products={trending} shopHref={shopHref} onAdded={()=>setToast(t('home.addedToBag'))}/>}
+        {bestSellers.length>0&&<ProductSection title={t('home.bestSellersTitle')} subtitle={t('home.bestSellersSub')} products={bestSellers} shopHref={shopHref} onAdded={()=>setToast(t('home.addedToBag'))}/>}
+        {arrivals.length>0&&<ProductSection title={t('home.newArrivalsTitle')} subtitle={t('home.newArrivalsSub')} products={arrivals} shopHref={shopHref} onAdded={()=>setToast(t('home.addedToBag'))}/>}
+        {!hasAnySection&&audience!=='all'&&(
+          <section className="products-section">
+            <Empty text={audienceEmptyCopy(audience,t)} action={<Link className="btn dark-btn" to="/shop">{t('home.viewAll')}</Link>}/>
+          </section>
+        )}
+      </motion.div>
       <section className="simple-contact">
         <div>
           <p className="eyebrow gold">{t('home.personalService')}</p>
@@ -433,7 +580,7 @@ function Home(){
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
   </Layout>
 }
-function ProductSection({title,subtitle,products,onAdded}:{title:string;subtitle:string;products:Product[];onAdded:()=>void}){const {t}=useI18n();return <section className="products-section"><div className="section-head"><div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div><Link to="/shop">{t('home.viewAll')} <ArrowRight/></Link></div><div className="product-grid">{products.map(p=><ProductCard key={p.id} p={p} onAdded={onAdded}/>)}</div></section>}
+function ProductSection({title,subtitle,products,onAdded,shopHref='/shop'}:{title:string;subtitle:string;products:Product[];onAdded:()=>void;shopHref?:string}){const {t}=useI18n();return <section className="products-section"><div className="section-head"><div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div><Link to={shopHref}>{t('home.viewAll')} <ArrowRight/></Link></div><div className="product-grid">{products.map(p=><ProductCard key={p.id} p={p} onAdded={onAdded}/>)}</div></section>}
 function Loading(){const {t}=useI18n();return <div className="loading" role="status" aria-live="polite" aria-label={t('common.loading')}><Loader2 className="spin" aria-hidden="true"/></div>}
 function Shop(){
   const [products,setProducts]=useState<Product[]>([]);
@@ -443,9 +590,11 @@ function Shop(){
   const [q,setQ]=useState('');
   const [searchParams,setSearchParams]=useSearchParams();
   const cat=searchParams.get('category')||'all';
+  const audience=parseAudienceParam(searchParams.get('gender'));
   const [sort,setSort]=useState('ranking');
   const [toast,setToast]=useState('');
   const {t}=useI18n();
+  const reduceMotion=useReducedMotion();
 
   const load=()=>{
     setLoading(true);setError('');
@@ -457,11 +606,17 @@ function Shop(){
   useEffect(()=>{load()},[]);
 
   const selectCat=(id:string)=>{
-    if(id==='all')setSearchParams({});
-    else setSearchParams({category:id});
+    setSearchParams(audienceSearchParams(audience,id));
+  };
+  const selectAudience=(next:AudienceFilter)=>{
+    setSearchParams(audienceSearchParams(next,cat));
   };
   
-  let filtered=products.filter(p=>(cat==='all'||String(p.category_id)===cat)&&p.name.toLowerCase().includes(q.toLowerCase()));
+  let filtered=products.filter(p=>
+    matchesAudience(p,audience)
+    &&(cat==='all'||String(p.category_id)===cat)
+    &&p.name.toLowerCase().includes(q.toLowerCase())
+  );
   if(sort==='trending') filtered.sort((a,b)=>b.trendingScore-a.trendingScore);
   else if(sort==='best') filtered.sort((a,b)=>b.purchase_count-a.purchase_count);
   else if(sort==='newest') filtered.sort((a,b)=>new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -470,12 +625,17 @@ function Shop(){
   else if(sort==='availability') filtered.sort((a,b)=>resolveStockPriority(a)-resolveStockPriority(b));
   else if(sort==='az') filtered.sort((a,b)=>a.name.localeCompare(b.name));
 
+  const emptyText=(!q&&cat==='all'&&audience!=='all')
+    ?audienceEmptyCopy(audience,t)
+    :t('shop.emptyTitle');
+
   return <Layout>
     <section className="page-hero">
       <p className="eyebrow gold">{t('shop.eyebrow')}</p>
       <h1>{t('shop.title')}</h1>
     </section>
     <section className="catalog">
+      <AudienceSwitcher value={audience} onChange={selectAudience} variant="shop" labelKey="shop.audienceLabel"/>
       <div className="filters">
         <label className="search-field"><span className="sr-only">{t('shop.search')}</span><Search aria-hidden="true"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('shop.search')}/></label>
         <div className="sort-field">
@@ -493,10 +653,22 @@ function Shop(){
         </div>
         <div className="filter-chips" role="group" aria-label={t('shop.eyebrow')}>
           <button type="button" className={cat==='all'?'active':''} onClick={()=>selectCat('all')}>{t('shop.categoryAll')}</button>
-          {cats.map(c=><button type="button" key={c.id} className={cat===String(c.id)?'active':''} onClick={()=>selectCat(String(c.id))}>{c.name}</button>)}
+          {cats.map(c=><button type="button" key={c.id} className={cat===String(c.id)?'active':''} onClick={()=>selectCat(String(c.id))}>{localizedCategoryName(c,t)}</button>)}
         </div>
       </div>
-      {loading?<Loading/>:error?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:filtered.length?<div className="product-grid">{filtered.map(p=><ProductCard key={p.id} p={p} onAdded={()=>setToast(t('home.addedToBag'))}/>)}</div>:<Empty text={t('shop.emptyTitle')} action={<button type="button" className="btn" onClick={()=>{setQ('');selectCat('all')}}>{t('shop.emptyAction')}</button>}/>}
+      {loading?<Loading/>:error?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:(
+        <motion.div
+          key={`${audience}-${cat}-${sort}-${q}`}
+          className="audience-grid-wrap"
+          initial={reduceMotion?false:{opacity:0.55}}
+          animate={{opacity:1}}
+          transition={reduceMotion?{duration:0}:{duration:0.25,ease:'easeOut'}}
+        >
+          {filtered.length
+            ?<div className="product-grid">{filtered.map(p=><ProductCard key={p.id} p={p} onAdded={()=>setToast(t('home.addedToBag'))}/>)}</div>
+            :<Empty text={emptyText} action={<button type="button" className="btn" onClick={()=>{setQ('');setSearchParams(audienceSearchParams('all','all'))}}>{t('shop.emptyAction')}</button>}/>}
+        </motion.div>
+      )}
     </section>
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
   </Layout>
@@ -590,7 +762,7 @@ function ProductDetail(){
       <ProductGallery images={p.images} name={p.name}/>
       <div className="info">
         <Link to="/shop" className="back-link"><ChevronLeft/> {t('product.backToShop')}</Link>
-        <p className="eyebrow gold">{p.category?.name||BRAND.fullName}</p>
+        <p className="eyebrow gold">{localizedCategoryName(p.category,t)||BRAND.fullName}</p>
         <h1>{p.name}</h1>
         {short?<p className="product-short detail-short">{short}</p>:null}
         <p className="price">{money(p.price)}</p>
@@ -617,13 +789,17 @@ function ProductDetail(){
 }
 function Cart(){
   const {items,update,remove,total,clear}=useCart();
+  const [step,setStep]=useState<'cart'|'customer'>('cart');
   const [ordering,setOrdering]=useState(false);
   const [toast,setToast]=useState<{text:string;tone:'ok'|'err'|'info'}|null>(null);
   const [error,setError]=useState('');
+  const [fieldErrors,setFieldErrors]=useState<{name?:string;phone?:string;email?:string}>({});
+  const [fullName,setFullName]=useState(()=>{try{return String(JSON.parse(localStorage.getItem('ks-guest-customer')||'{}').full_name||'')}catch{return ''}});
+  const [phone,setPhone]=useState(()=>{try{return String(JSON.parse(localStorage.getItem('ks-guest-customer')||'{}').phone||'')}catch{return ''}});
+  const [email,setEmail]=useState(()=>{try{return String(JSON.parse(localStorage.getItem('ks-guest-customer')||'{}').email||'')}catch{return ''}});
   const [waLink,setWaLink]=useState('');
   const [reservedOrder,setReservedOrder]=useState('');
   const {t,lang}=useI18n();
-  const {user}=useAuth();
 
   useEffect(()=>{
     const saved=readWhatsAppFallback();
@@ -633,20 +809,38 @@ function Cart(){
     }
   },[]);
 
+  const persistGuest=(next:{full_name:string;phone:string;email:string})=>{
+    try{localStorage.setItem('ks-guest-customer',JSON.stringify(next))}catch{/* private mode */}
+  };
+
+  const validateGuest=()=>{
+    const errs:{name?:string;phone?:string;email?:string}={};
+    if(!fullName.trim())errs.name=t('cart.nameRequired');
+    if(!phone.trim())errs.phone=t('cart.phoneRequired');
+    else if(!isValidCameroonPhone(phone))errs.phone=t('cart.phoneInvalid');
+    if(email.trim()&&!isValidEmail(email))errs.email=t('cart.emailInvalid');
+    setFieldErrors(errs);
+    return Object.keys(errs).length===0;
+  };
+
   const friendlyOrderError=(err:any)=>{
-    const m=String(err?.message||err||'');
     const code=err?.code||'';
-    if(code==='SCHEMA_ORDER_ITEMS'||/product_name|schema cache|order_items|column/i.test(m))return t('cart.orderError');
-    if(/timed out/i.test(m))return t('cart.orderError');
-    if(/empty|invalid cart/i.test(m))return t('cart.orderError');
-    if(/postgrest|postgres|PGRST/i.test(m))return t('cart.orderError');
+    if(code==='INVALID_NAME')return t('cart.nameRequired');
+    if(code==='INVALID_PHONE')return t('cart.phoneInvalid');
+    if(code==='INVALID_EMAIL')return t('cart.emailInvalid');
+    if(code==='CUSTOMER_CREATE_FAILED')return t('cart.customerSaveError');
+    if(code==='EMPTY_CART'||code==='INVALID_CART')return t('cart.orderError');
+    if(/timed out|network|fetch/i.test(String(err?.message||'')))return t('cart.networkError');
     return t('cart.orderError');
   };
 
   const order=async()=>{
     if(ordering||!items.length)return;
+    if(!validateGuest())return;
     setOrdering(true);setError('');
     setToast({text:t('cart.ordering'),tone:'info'});
+    const customer={full_name:fullName.trim(),phone:phone.trim(),email:email.trim()};
+    persistGuest(customer);
     try{
       const snapshot=items.map((x:any)=>({
         product_id:x.product.id,
@@ -666,6 +860,7 @@ function Cart(){
       const payload={
         items:snapshot.map(({line:_drop,...item})=>item),
         total,
+        customer,
       };
       const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(!d?.order_number)throw new Error(t('cart.orderError'));
@@ -678,8 +873,8 @@ function Cart(){
         formatMoney:money,
         messageTemplate:(orderNumber,lines,orderTotal,storeName)=>
           String(t('cart.whatsappMessage',orderNumber,lines,orderTotal,storeName)),
-        customerName:String(user?.user_metadata?.full_name||user?.user_metadata?.name||''),
-        customerEmail:String(user?.email||''),
+        customerName:customer.full_name,
+        customerPhone:customer.phone,
         lang,
       });
 
@@ -689,10 +884,8 @@ function Cart(){
       storeWhatsAppFallback({url:wa,orderNumber:d.order_number,ts:Date.now()});
       clear();
 
-      // Navigate immediately — no React state updates before this (mobile-safe).
       navigateToWhatsApp(wa);
 
-      // If navigation is blocked, show same-page fallback with the exact prefilled link.
       window.setTimeout(()=>{
         setWaLink(wa);
         setReservedOrder(d.order_number);
@@ -724,7 +917,27 @@ function Cart(){
     </div>
   ):<Link className="btn dark-btn" to="/shop">{t('cart.emptyBtn')}</Link>;
 
-  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{t('cart.eyebrow')}</p><h1>{t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout"><div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={productCoverImage(x.product.images)} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div><aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div><button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p><Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link></aside></div>:<Empty text={waLink?t('cart.orderSentTitle'):t('cart.emptyText')} action={emptyAction}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
+  const customerForm=(
+    <div className="checkout-customer">
+      <p className="eyebrow">{t('cart.customerStepEyebrow')}</p>
+      <h2>{t('cart.customerStepTitle')}</h2>
+      <p className="fine">{t('cart.customerStepHelp')}</p>
+      <label>{t('cart.fullName')}
+        <input type="text" autoComplete="name" value={fullName} onChange={e=>{setFullName(e.target.value);setFieldErrors(x=>({...x,name:undefined}))}} required/>
+        {fieldErrors.name?<span className="field-error" role="alert">{fieldErrors.name}</span>:null}
+      </label>
+      <label>{t('cart.phone')}
+        <input type="tel" autoComplete="tel" inputMode="tel" value={phone} onChange={e=>{setPhone(e.target.value);setFieldErrors(x=>({...x,phone:undefined}))}} required placeholder="+237 6XX XXX XXX"/>
+        {fieldErrors.phone?<span className="field-error" role="alert">{fieldErrors.phone}</span>:null}
+      </label>
+      <label>{t('cart.emailOptional')}
+        <input type="email" autoComplete="email" value={email} onChange={e=>{setEmail(e.target.value);setFieldErrors(x=>({...x,email:undefined}))}}/>
+        {fieldErrors.email?<span className="field-error" role="alert">{fieldErrors.email}</span>:null}
+      </label>
+    </div>
+  );
+
+  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{step==='customer'?t('cart.customerStepEyebrow'):t('cart.eyebrow')}</p><h1>{step==='customer'?t('cart.customerStepTitle'):t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout">{step==='cart'?<div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={productCoverImage(x.product.images)} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div>:<aside className="summary checkout-customer-panel">{customerForm}</aside>}<aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div>{step==='cart'?<button type="button" className="btn gold-btn" onClick={()=>setStep('customer')}>{t('cart.continueToCustomer')}</button>:<button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>}{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p>{step==='customer'?<button type="button" className="text-link checkout-back" onClick={()=>setStep('cart')}><ChevronLeft/> {t('cart.backToCart')}</button>:<Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link>}</aside></div>:<Empty text={waLink?t('cart.orderSentTitle'):t('cart.emptyText')} action={emptyAction}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
 }
 function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty" role="status"><Gem aria-hidden="true"/><h3>{text}</h3>{action}</div>}
 function useAdminNoIndex(){useEffect(()=>{const meta=document.createElement('meta');meta.name='robots';meta.content='noindex, nofollow, noarchive';document.head.appendChild(meta);const oldTitle=document.title;document.title='Private Portal';return()=>{meta.remove();document.title=oldTitle}},[])}
@@ -741,7 +954,7 @@ function AdminShell({children}:{children:React.ReactNode}){
   const ThemeIcon = theme === 'light' ? Sun : Moon;
   const themeLabel = theme === 'light' ? t('header.themeDark') : t('header.themeLight');
   const logout=async()=>{await supabase?.auth.signOut();nav('/admin/login')};
-  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button type="button" className="close-admin" onClick={()=>setOpen(false)} aria-label={t('common.close')}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink></nav><button type="button" onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button type="button" onClick={()=>setOpen(true)} aria-label={t('header.menu')}><Menu/></button><div className="head-actions admin-head-actions"><button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button><button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button><span>{t('admin.shopManager')}</span><CircleUser aria-hidden="true"/></div></header>{children}</div></div>
+  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button type="button" className="close-admin" onClick={()=>setOpen(false)} aria-label={t('common.close')}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink><NavLink to="/admin/customers"><Users/> {t('admin.navCustomers')}</NavLink></nav><button type="button" onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button type="button" onClick={()=>setOpen(true)} aria-label={t('header.menu')}><Menu/></button><div className="head-actions admin-head-actions"><button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button><button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button><span>{t('admin.shopManager')}</span><CircleUser aria-hidden="true"/></div></header>{children}</div></div>
 }
 function AdminDashboard(){
   const [data,setData]=useState<any>(null);
@@ -781,6 +994,7 @@ function AdminDashboard(){
   if(loading)return <AdminShell><Loading/></AdminShell>;
   const d=data||{
     totalProducts:0,available:0,lowStock:0,outOfStock:0,ordersToday:0,pending:0,delivered:0,revenue:0,
+    totalCustomers:0,returningCustomers:0,newCustomers:0,repeatCustomerRate:0,averageCustomerSpend:0,topCustomers:[],
     recent:[],trendingProduct:null,bestSeller:null,mostViewed:null,mostCart:null,highestRevenue:null,runningLow:[],
   };
   const cards=[
@@ -791,6 +1005,12 @@ function AdminDashboard(){
     [t('admin.stats.ordersToday'),d.ordersToday,MessageCircle],
     [t('admin.stats.pending'),d.pending,MessageCircle],
     [t('admin.stats.delivered'),d.delivered,Check],
+    [t('admin.stats.revenue'),money(d.revenue||0),Sparkles],
+  ];
+  const customerCards=[
+    [t('admin.stats.totalCustomers'),d.totalCustomers,Users],
+    [t('admin.stats.returningCustomers'),d.returningCustomers,Users],
+    [t('admin.stats.totalOrders'),d.totalOrders||0,Package],
     [t('admin.stats.revenue'),money(d.revenue||0),Sparkles],
   ];
   const widgets=[
@@ -814,6 +1034,9 @@ function AdminDashboard(){
     {error&&<p className="error" role="alert" style={{marginBottom:'1.25rem'}}>{error} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
     {!error&&warnings.length>0&&<p className="fine" role="status" style={{marginBottom:'1.25rem',color:'var(--fg-muted)'}}>{t('admin.dashboardPartial')} <button type="button" className="btn dark-btn" style={{marginLeft:12}} onClick={load}>{t('common.retry')}</button></p>}
     <div className="stat-grid simple-stats">{cards.map(([n,v,I]:any)=><article key={n}><I/><span>{n}</span><strong>{v}</strong></article>)}</div>
+    <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.customersSectionEyebrow')}</p><h2>{t('admin.customersSectionTitle')}</h2></div></div>
+    <div className="stat-grid simple-stats">{customerCards.map(([n,v,I]:any)=><article key={n}><I/><span>{n}</span><strong>{v}</strong></article>)}</div>
+    <p className="fine customer-metrics-note">{t('admin.stats.repeatRate')}: {Math.round((Number(d.repeatCustomerRate)||0)*100)}% · {t('admin.stats.averageSpend')}: {money(d.averageCustomerSpend||0)}</p>
     <div className="admin-title" style={{marginTop:'2rem'}}><div><p className="eyebrow gold">{t('admin.analyticsEyebrow')}</p><h2>{t('admin.analyticsTitle')}</h2></div></div>
     <div className="stat-grid simple-stats">{widgets.map(w=><article key={w.label}><span>{w.label}</span><strong style={{fontSize:'0.85rem',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{w.product?.name||'—'}</strong></article>)}</div>
     {insights.length>0&&<>
@@ -839,7 +1062,11 @@ function AdminDashboard(){
       </article>
       <article>
         <div className="panel-head"><p className="eyebrow">{t('admin.latestOrders')}</p><Link to="/admin/orders">{t('admin.viewAllOrders')}</Link></div>
-        {(d.recent||[]).length?(d.recent||[]).map((o:any)=><Link className="mini-order" to="/admin/orders" key={o.id}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleDateString()}</span></div><strong>{money(o.total)}</strong><Status status={t(`admin.orderStatuses.${o.status}`)||o.status}/></Link>):<p className="fine" style={{padding:'12px 0'}}>{t('admin.noOrders')}</p>}
+        {(d.recent||[]).length?(d.recent||[]).map((o:any)=><Link className="mini-order" to="/admin/orders" key={o.id}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleDateString()}</span></div><strong>{money(o.total)}</strong><Status status={o.status}/></Link>):<p className="fine" style={{padding:'12px 0'}}>{t('admin.noOrders')}</p>}
+      </article>
+      <article>
+        <div className="panel-head"><p className="eyebrow">{t('admin.topCustomers')}</p><Link to="/admin/customers">{t('admin.viewAllCustomers')}</Link></div>
+        {(d.topCustomers||[]).length?(d.topCustomers||[]).map((c:any)=><Link className="mini-order" to="/admin/customers" key={c.id}><div><b>{c.full_name}</b><span>{c.phone} · {c.order_count} {t('admin.customerOrders').toLowerCase()}</span></div><strong>{money(c.total_spent||0)}</strong></Link>):<p className="fine" style={{padding:'12px 0'}}>{t('admin.topCustomersEmpty')}</p>}
       </article>
     </div>
   </section></AdminShell>
@@ -849,6 +1076,7 @@ function AdminProducts(){
   const [products,setProducts]=useState<Product[]>([]);
   const [cats,setCats]=useState<any[]>([]);
   const [q,setQ]=useState('');
+  const [audienceFilter,setAudienceFilter]=useState<'all'|'men'|'women'|'unisex'|'unset'>('all');
   const [editing,setEditing]=useState<any>(null);
   const [error,setError]=useState('');
   const [loading,setLoading]=useState(true);
@@ -872,11 +1100,36 @@ function AdminProducts(){
       load();
     }catch(e:any){setError(e.message||t('admin.productSaveError'))}
   };
+  const audienceLabel=(p:Product)=>{
+    const g=normalizeTargetGender(p.target_gender);
+    if(!g)return t('admin.audienceUnset');
+    if(g==='men')return t('admin.audienceMen');
+    if(g==='women')return t('admin.audienceWomen');
+    return t('admin.audienceUnisex');
+  };
+  const visible=products.filter(p=>{
+    if(!p.name.toLowerCase().includes(q.toLowerCase()))return false;
+    const g=normalizeTargetGender(p.target_gender);
+    if(audienceFilter==='all')return true;
+    if(audienceFilter==='unset')return !g;
+    return g===audienceFilter;
+  });
   return <AdminShell><section className="admin-content">
     <div className="admin-title"><div><p className="eyebrow gold">{t('admin.productsEyebrow')}</p><h1>{t('admin.productsTitle')}</h1></div><button type="button" className="btn gold-btn" onClick={()=>setEditing({})}><Plus/> {t('admin.addProduct')}</button></div>
     <label className="admin-search"><Search aria-hidden="true"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchProduct')} aria-label={t('admin.searchProduct')}/></label>
+    <div className="admin-audience-filters" role="group" aria-label={t('admin.table.audience')}>
+      {([
+        ['all','audienceFilterAll'],
+        ['men','audienceFilterMen'],
+        ['women','audienceFilterWomen'],
+        ['unisex','audienceFilterUnisex'],
+        ['unset','audienceFilterUnset'],
+      ] as const).map(([key,label])=>(
+        <button key={key} type="button" className={audienceFilter===key?'active':''} onClick={()=>setAudienceFilter(key)}>{t(`admin.${label}`)}</button>
+      ))}
+    </div>
     {loading?<Loading/>:error&&!products.length?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:(
-      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{products.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())).map(p=><tr key={p.id}><td><div className="table-product"><ProductImage src={productCoverImage(p.images)} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.audience')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{visible.map(p=><tr key={p.id}><td><div className="table-product"><ProductImage src={productCoverImage(p.images)} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td><span className={`audience-badge${normalizeTargetGender(p.target_gender)?'':' unset'}`}>{audienceLabel(p)}</span></td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td></tr>)}</tbody></table></div>
     )}
     {editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>{setEditing(null);setError('')}} done={()=>{setEditing(null);setToast(t('admin.productSaved'));load()}} error={error} setError={setError}/>}
     <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
@@ -900,6 +1153,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     description:item.description||'',
     price:item.price??'',
     category_id:item.category_id||cats[0]?.id||'',
+    target_gender:(normalizeTargetGender(item.target_gender)||'') as TargetGender|'',
     stock_quantity:item.stock_quantity??1,
     low_stock_threshold:item.low_stock_threshold??5,
     colors:toCsv(item.colors),
@@ -944,6 +1198,8 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     const m=String(err?.message||err||'');
     if(code==='SCHEMA_OPTIONS'||/options could not be saved|colors|models|schema cache|missing products\./i.test(m))return t('admin.productOptionsSaveError');
     if(code==='SCHEMA_VISIBILITY'||/visibility settings|featured|hidden/i.test(m))return t('admin.productVisibilitySaveError');
+    if(code==='SCHEMA_AUDIENCE'||/target audience|target_gender/i.test(m))return t('admin.productAudienceSaveError');
+    if(code==='VALIDATION_AUDIENCE')return t('admin.validationAudience');
     if(code==='SCHEMA_PRODUCT'||/product details could not/i.test(m))return t('admin.productSaveError');
     if(/timed out/i.test(m))return t('admin.productSaveTimeout');
     if(/unauthorized/i.test(m))return t('admin.dashboardAuthError');
@@ -956,6 +1212,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
   const validate=()=>{
     if(!form.name.trim())return t('admin.validationName');
     if(!form.category_id)return t('admin.validationCategory');
+    if(!form.target_gender)return t('admin.validationAudience');
     if(form.price===''||Number(form.price)<0||Number.isNaN(Number(form.price)))return t('admin.validationPrice');
     if(form.stock_quantity===''||Number(form.stock_quantity)<0||Number.isNaN(Number(form.stock_quantity)))return t('admin.validationStock');
     if(form.low_stock_threshold!==''&&(Number(form.low_stock_threshold)<0||Number.isNaN(Number(form.low_stock_threshold))))return t('admin.validationLowStock');
@@ -1061,6 +1318,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
         description:form.description.trim(),
         price:Number(form.price),
         category_id:form.category_id,
+        target_gender:form.target_gender,
         stock_quantity:Number(form.stock_quantity),
         low_stock_threshold:form.low_stock_threshold===''?5:Number(form.low_stock_threshold),
         display_priority:form.display_priority===''?null:Number(form.display_priority),
@@ -1102,9 +1360,45 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
             <label className="full">{t('admin.modal.name')}<input value={form.name} onChange={e=>set('name',e.target.value)} required maxLength={120} autoFocus/></label>
             <label className="full">{t('admin.modal.shortDesc')}<input value={form.short_description} onChange={e=>set('short_description',e.target.value)} maxLength={180} placeholder={t('admin.modal.shortDescPlaceholder')}/><small className="field-hint">{t('admin.modal.shortDescHelp')}</small></label>
             <label className="full">{t('admin.modal.desc')}<textarea value={form.description} onChange={e=>set('description',e.target.value)} rows={3} placeholder={t('admin.modal.descHint')}/></label>
-            <label>{t('admin.modal.category')}<select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>{cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
             <label>{t('admin.modal.price')}<input type="number" min="0" step="1" value={form.price} onChange={e=>set('price',e.target.value)} required/></label>
             <label>{t('admin.modal.stockQty')}<input type="number" min="0" value={form.stock_quantity} onChange={e=>set('stock_quantity',e.target.value)} required/></label>
+          </div>
+        </section>
+
+        <section className="form-section">
+          <h3>{t('admin.modal.sectionIdentity')}</h3>
+          <div className="form-section-split">
+            <div className="form-identity-block">
+              <span>{t('admin.modal.productType')}</span>
+              <label>{t('admin.modal.category')}
+                <select value={form.category_id} onChange={e=>set('category_id',e.target.value)} required>
+                  {cats.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </label>
+              <small>{t('admin.modal.productTypeHelp')}</small>
+            </div>
+            <div className="form-identity-block">
+              <span id="target-audience-label">{t('admin.modal.targetAudience')}</span>
+              <div className="audience-radios" role="radiogroup" aria-labelledby="target-audience-label">
+                {([
+                  ['men','audienceMen'],
+                  ['women','audienceWomen'],
+                  ['unisex','audienceUnisex'],
+                ] as const).map(([val,label])=>(
+                  <label key={val}>
+                    <input
+                      type="radio"
+                      name="target_gender"
+                      value={val}
+                      checked={form.target_gender===val}
+                      onChange={()=>set('target_gender',val)}
+                    />
+                    {t(`admin.modal.${label}`)}
+                  </label>
+                ))}
+              </div>
+              <small>{t('admin.modal.targetAudienceHelp')}</small>
+            </div>
           </div>
         </section>
 
@@ -1200,8 +1494,22 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     </form>
   </div>
 }
-const statuses=['Pending','Discussing on WhatsApp','Confirmed','Preparing','Out for Delivery','Delivered','Cancelled'];
-function Status({status}:{status:string}){return <span className={`status s-${status.toLowerCase().replaceAll(' ','-')}`}>{status}</span>}
+const ORDER_STATUSES=['Pending','Confirmed','Processing','Delivered','Cancelled'];
+function canonicalStatus(status:string){
+  if(status==='Discussing on WhatsApp')return 'Pending';
+  if(status==='Preparing'||status==='Out for Delivery')return 'Processing';
+  return status||'Pending';
+}
+function statusMatchesFilter(status:string,filter:string){
+  if(filter==='All')return true;
+  return canonicalStatus(status)===filter;
+}
+function Status({status}:{status:string}){
+  const {t}=useI18n();
+  const key=canonicalStatus(status);
+  const label=t(`admin.orderStatuses.${status}`)||t(`admin.orderStatuses.${key}`)||status;
+  return <span className={`status s-${key.toLowerCase().replaceAll(' ','-')}`}>{label}</span>;
+}
 function AdminHero(){
   const [slides,setSlides]=useState<any[]>([]);
   const [cats,setCats]=useState<any[]>([]);
@@ -1424,19 +1732,153 @@ function AdminHero(){
   </section></AdminShell>;
 }
 function AdminOrders(){
-  const [orders,setOrders]=useState<any[]>([]);const [selected,setSelected]=useState<any>(null);const [q,setQ]=useState('');const [filter,setFilter]=useState('All');const {session}=useAuth();const {t}=useI18n();
-  const load=()=>api('/api/orders',{headers:authHeaders(session?.access_token)}).then(setOrders);useEffect(()=>{load()},[]);
-  const shown=orders.filter(o=>(filter==='All'||o.status===filter)&&(o.order_number.toLowerCase().includes(q.toLowerCase())||(o.customer_name||'').toLowerCase().includes(q.toLowerCase())));
-  return <AdminShell><section className="admin-content"><div className="admin-title"><div><p className="eyebrow gold">{t('admin.clientOrdersEyebrow')}</p><h1>{t('admin.ordersTitle')}</h1></div></div><div className="order-tools"><label className="admin-search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchOrder')}/></label><select value={filter} onChange={e=>setFilter(e.target.value)}><option value="All">{t('admin.filterAll')}</option>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></div><div className="order-list">{shown.map(o=><button key={o.id} onClick={()=>setSelected(o)}><div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleString()}</span></div><div><b>{o.customer_name||t('admin.whatsappClient')}</b><span>{o.items?.length} {t('cart.piecesPlural')}</span></div><strong>{money(o.total)}</strong><Status status={t(`admin.orderStatuses.${o.status}`)||o.status}/><ChevronRight/></button>)}</div>{!shown.length&&<Empty text={t('admin.noOrders')}/>}{selected&&<OrderDrawer order={selected} token={session?.access_token} close={()=>setSelected(null)} done={()=>{setSelected(null);load()}}/>}</section></AdminShell>
+  const [orders,setOrders]=useState<any[]>([]);
+  const [selected,setSelected]=useState<any>(null);
+  const [q,setQ]=useState('');
+  const [filter,setFilter]=useState('All');
+  const [error,setError]=useState('');
+  const {session}=useAuth();
+  const {t}=useI18n();
+  const load=()=>{
+    if(!session?.access_token)return;
+    api('/api/orders',{headers:authHeaders(session.access_token)})
+      .then((d)=>{setOrders(Array.isArray(d)?d:[]);setError('')})
+      .catch(()=>setError(t('admin.ordersLoadError')));
+  };
+  useEffect(()=>{load()},[session?.access_token]);
+  const needle=q.trim().toLowerCase();
+  const shown=orders.filter(o=>{
+    if(!statusMatchesFilter(o.status,filter))return false;
+    if(!needle)return true;
+    const hay=[o.order_number,o.customer_name,o.whatsapp_number,o.customer?.full_name,o.customer?.phone,o.customer?.email].map(v=>String(v||'').toLowerCase()).join(' ');
+    return hay.includes(needle)||String(o.whatsapp_number||'').replace(/\D/g,'').includes(needle.replace(/\D/g,''));
+  });
+  return <AdminShell><section className="admin-content">
+    <div className="admin-title"><div><p className="eyebrow gold">{t('admin.clientOrdersEyebrow')}</p><h1>{t('admin.ordersTitle')}</h1></div></div>
+    {error&&<p className="error" role="alert">{error} <button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button></p>}
+    <div className="order-tools"><label className="admin-search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchOrder')}/></label><select value={filter} onChange={e=>setFilter(e.target.value)}><option value="All">{t('admin.filterAll')}</option>{ORDER_STATUSES.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></div>
+    <div className="order-list">{shown.map(o=>{
+      const name=o.customer_name||o.customer?.full_name||t('admin.whatsappClient');
+      const phone=o.whatsapp_number||o.customer?.phone||'';
+      return <button type="button" key={o.id} onClick={()=>setSelected(o)}>
+        <div><b>{o.order_number}</b><span>{new Date(o.created_at).toLocaleString()}</span></div>
+        <div><b>{name}</b><span>{phone||'—'}</span></div>
+        <strong>{money(o.total)}</strong>
+        <Status status={o.status}/>
+        <ChevronRight/>
+      </button>;
+    })}</div>
+    {!shown.length&&<Empty text={t('admin.noOrders')}/>}
+    {selected&&<OrderDrawer order={selected} token={session?.access_token} close={()=>setSelected(null)} done={()=>{setSelected(null);load()}}/>}
+  </section></AdminShell>;
 }
 function OrderDrawer({order,token,close,done}:any){
-  const [form,setForm]=useState({...order});const [busy,setBusy]=useState(false);const {t}=useI18n();
-  const set=(k:string,v:any)=>setForm((x:any)=>({...x,[k]:v}));
-  const save=async(status?:string)=>{setBusy(true);await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({...form,status:status||form.status})});setBusy(false);done()};
-  const customerWa=(form.whatsapp_number||SOCIAL.whatsappNumber).replace(/\D/g,'');
-  const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+form.order_number)}`;
-  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title"><div className="modal-head"><div><p className="eyebrow gold">{form.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div><Status status={t(`admin.orderStatuses.${form.status}`)||form.status}/><div className="drawer-items">{form.items.map((x:any,i:number)=><div key={i}><ProductImage src={productCoverImage(x.product?.images)} alt=""/><span><b>{x.product_name}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity}</small></span><strong>{money(x.price*x.quantity)}</strong></div>)}</div><div className="drawer-total"><span>{t('cart.total')}</span><b>{money(form.total)}</b></div><h3>{t('admin.customerInfo')}</h3><div className="form-grid"><label>{t('admin.name')}<input value={form.customer_name||''} onChange={e=>set('customer_name',e.target.value)}/></label><label>{t('admin.waNumber')}<input value={form.whatsapp_number||''} onChange={e=>set('whatsapp_number',e.target.value)}/></label><label className="full">{t('admin.address')}<textarea value={form.address||''} onChange={e=>set('address',e.target.value)}/></label><label className="full">{t('admin.gps')}<input value={form.gps_location||''} onChange={e=>set('gps_location',e.target.value)}/></label><label>{t('admin.paymentMethod')}<input value={form.payment_method||''} onChange={e=>set('payment_method',e.target.value)}/></label><label>{t('admin.deliveryInstructions')}<input value={form.delivery_instructions||''} onChange={e=>set('delivery_instructions',e.target.value)}/></label><label className="full">{t('admin.status')}<select value={form.status} onChange={e=>set('status',e.target.value)}>{statuses.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label></div><div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a><button type="button" onClick={()=>navigator.clipboard.writeText(form.address||'')}><Copy/> {t('admin.address')}</button><button type="button" onClick={()=>navigator.clipboard.writeText(form.gps_location||'')}><MapPin/> {t('admin.gps')}</button></div><div className="modal-actions"><button type="button" className="danger" onClick={()=>save('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button><button type="button" className="btn dark-btn" onClick={()=>save('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button><button type="button" className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div></aside></div>
+  const [status,setStatus]=useState(canonicalStatus(order.status));
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const [toast,setToast]=useState('');
+  const {t}=useI18n();
+  const customer=order.customer||{};
+  const name=order.customer_name||customer.full_name||t('admin.whatsappClient');
+  const phone=order.whatsapp_number||customer.phone||'';
+  const email=order.user_email||customer.email||'';
+  const save=async(next?:string)=>{
+    const nextStatus=next||status;
+    setBusy(true);setError('');
+    try{
+      await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({id:order.id,status:nextStatus})});
+      setStatus(nextStatus);
+      setToast(t('admin.statusUpdated'));
+      window.setTimeout(()=>done(),500);
+    }catch{
+      setError(t('admin.statusUpdateError'));
+    }finally{
+      setBusy(false);
+    }
+  };
+  const customerWa=(phone||SOCIAL.whatsappNumber).replace(/\D/g,'');
+  const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+order.order_number)}`;
+  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title">
+    <div className="modal-head"><div><p className="eyebrow gold">{order.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div>
+    <Status status={status}/>
+    <div className="profile-block">
+      <h3>{t('admin.customerInfo')}</h3>
+      <p><b>{name}</b></p>
+      <p>{phone||'—'}</p>
+      {email?<p>{email}</p>:null}
+    </div>
+    <div className="drawer-items">{(order.items||[]).map((x:any,i:number)=><div key={i}><ProductImage src={productCoverImage(x.product?.images)} alt=""/><span><b>{x.product_name||x.product?.name||'—'}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity} · {t('admin.unitPrice')} {money(x.price)}</small></span><strong>{money(Number(x.price)*Number(x.quantity))}</strong></div>)}</div>
+    <div className="drawer-total"><span>{t('cart.total')}</span><b>{money(order.total)}</b></div>
+    <label className="status-field">{t('admin.status')}<select value={status} onChange={e=>setStatus(e.target.value)}>{ORDER_STATUSES.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label>
+    {error&&<p className="error" role="alert">{error}</p>}
+    {toast&&<p className="fine" role="status">{toast}</p>}
+    <div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a></div>
+    <div className="modal-actions"><button type="button" className="danger" onClick={()=>save('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button><button type="button" className="btn dark-btn" onClick={()=>save('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button><button type="button" className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
+  </aside></div>;
+}
+function AdminCustomers(){
+  const [customers,setCustomers]=useState<any[]>([]);
+  const [selected,setSelected]=useState<any>(null);
+  const [q,setQ]=useState('');
+  const [error,setError]=useState('');
+  const {session}=useAuth();
+  const {t}=useI18n();
+  const load=(query='')=>{
+    if(!session?.access_token)return;
+    const path=query?`/api/customers?q=${encodeURIComponent(query)}`:'/api/customers';
+    api(path,{headers:authHeaders(session.access_token)})
+      .then((d)=>{setCustomers(Array.isArray(d?.customers)?d.customers:[]);setError('')})
+      .catch(()=>setError(t('admin.customersLoadError')));
+  };
+  useEffect(()=>{
+    const id=window.setTimeout(()=>load(q),250);
+    return ()=>window.clearTimeout(id);
+  },[q,session?.access_token]);
+  const typeLabel=(type:string)=>type==='returning'?t('admin.customerTypeReturning'):t('admin.customerTypeNew');
+  return <AdminShell><section className="admin-content">
+    <div className="admin-title"><div><p className="eyebrow gold">{t('admin.customersEyebrow')}</p><h1>{t('admin.customersTitle')}</h1></div></div>
+    {error&&<p className="error" role="alert">{error} <button type="button" className="btn dark-btn" onClick={()=>load(q)}>{t('common.retry')}</button></p>}
+    <div className="order-tools"><label className="admin-search"><Search/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('admin.searchCustomer')}/></label></div>
+    <div className="customer-list">{customers.map(c=>(
+      <button type="button" key={c.id} onClick={()=>setSelected(c)}>
+        <div><b>{c.full_name}</b><span>{c.phone}</span></div>
+        <div><span>{c.email||t('admin.noEmail')}</span><span>{c.order_count} · {money(c.total_spent||0)}</span></div>
+        <span className={`customer-type t-${c.customer_type}`}>{typeLabel(c.customer_type)}</span>
+        <span className="fine">{c.last_order_at?new Date(c.last_order_at).toLocaleDateString():'—'}</span>
+        <ChevronRight/>
+      </button>
+    ))}</div>
+    {!customers.length&&<Empty text={t('admin.noCustomers')}/>}
+    {selected&&<CustomerDrawer customer={selected} close={()=>setSelected(null)}/>}
+  </section></AdminShell>;
+}
+function CustomerDrawer({customer,close}:any){
+  const {t}=useI18n();
+  const typeLabel=customer.customer_type==='returning'?t('admin.customerTypeReturning'):t('admin.customerTypeNew');
+  return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="customer-drawer-title">
+    <div className="modal-head"><div><p className="eyebrow gold">{typeLabel}</p><h2 id="customer-drawer-title">{t('admin.customerProfile')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div>
+    <div className="profile-block">
+      <h3>{customer.full_name}</h3>
+      <p>{customer.phone}</p>
+      <p>{customer.email||t('admin.noEmail')}</p>
+      <p className="fine">{t('admin.dateJoined')}: {customer.created_at?new Date(customer.created_at).toLocaleDateString():'—'}</p>
+    </div>
+    <div className="profile-metrics">
+      <article><span>{t('admin.totalOrdersLabel')}</span><strong>{customer.order_count||0}</strong></article>
+      <article><span>{t('admin.totalSpentLabel')}</span><strong>{money(customer.total_spent||0)}</strong></article>
+      <article><span>{t('admin.lastOrder')}</span><strong>{customer.last_order_at?new Date(customer.last_order_at).toLocaleDateString():'—'}</strong></article>
+      <article><span>{t('admin.averageOrderLabel')}</span><strong>{money(customer.average_order_value||0)}</strong></article>
+    </div>
+    <h3>{t('admin.orderHistory')}</h3>
+    <div className="order-list compact">{(customer.orders||[]).length?(customer.orders||[]).map((o:any)=>(
+      <div className="history-row" key={o.id}>
+        <div><b>{o.order_number}</b><span>{o.created_at?new Date(o.created_at).toLocaleDateString():'—'}</span></div>
+        <strong>{money(o.total)}</strong>
+        <Status status={o.status}/>
+      </div>
+    )):<p className="fine">{t('admin.noCustomerOrders')}</p>}</div>
+  </aside></div>;
 }
 export default function App(){
-  return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
+  return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="/admin/customers" element={<Protected><AdminCustomers/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
 }
