@@ -485,7 +485,28 @@ a.bag b {
 .product-card > div { padding: 22px 3px; }
 .product-card { display: flex; flex-direction: column; min-width: 0; }
 .product-card > div { display: flex; flex: 1; flex-direction: column; }
-.product-card h3 { font: 700 26px/1.15 Italiana, 'Cormorant Garamond', serif; margin: 8px 0 6px; color: var(--fg); }
+/* Product name — primary readable signal under the image (Cormorant: real 600 weight; Italiana is single-weight/thin) */
+.product-card h3 {
+  font-family: 'Cormorant Garamond', Italiana, Georgia, serif;
+  font-size: 29px;
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1.2;
+  letter-spacing: 0.005em;
+  margin: 6px 0 8px;
+  color: var(--fg);
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  text-wrap: pretty;
+}
+.product-card > div > a {
+  display: block;
+  min-width: 0;
+}
+.product-card .eyebrow {
+  font-weight: 600;
+  color: var(--fg-muted);
+}
 .product-card .product-short {
   color: var(--fg-muted);
   font-size: 14px;
@@ -898,7 +919,18 @@ a.bag b {
 .product-detail { display: grid; grid-template-columns: 1.3fr 1fr; gap: 7vw; padding: 70px 5vw 110px; background: var(--bg); }
 .product-detail .gallery img { width: 100%; max-height: 650px; object-fit: cover; background: var(--bg-alt); }
 .product-detail .info { padding-top: 30px; }
-.product-detail .info h1 { font: 700 clamp(48px,5vw,72px)/1 Italiana, serif; margin: 18px 0 10px; color: var(--fg); }
+.product-detail .info h1 {
+  font-family: 'Cormorant Garamond', Italiana, Georgia, serif;
+  font-size: clamp(40px, 4.6vw, 64px);
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  margin: 18px 0 10px;
+  color: var(--fg);
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
 .product-detail .detail-short {
   color: var(--fg-muted);
   font-size: clamp(16px, 1.55vw, 19px);
@@ -1513,9 +1545,14 @@ footer small { grid-column: 1/-1; border-top: 1px solid #292926; padding-top: 25
   .products-section, .catalog, .cart-page { padding: 75px 20px; }
   .product-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; row-gap: 42px; }
   .product-image { height: 250px; }
-  .product-card h3 { font-size: 21px; font-weight: 700; }
+  .product-card h3 {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.005em;
+  }
   .product-card > div { padding: 15px 2px; }
-  .product-card .eyebrow { font-size: 10px; font-weight: 700; }
+  .product-card .eyebrow { font-size: 10px; font-weight: 600; }
   .product-card .product-short { font-size: 13px; -webkit-line-clamp: 2; line-clamp: 2; }
   .product-row { display: block; }
   .product-row strong { font-size: 15px; font-weight: 700; }
@@ -1537,7 +1574,12 @@ footer small { grid-column: 1/-1; border-top: 1px solid #292926; padding-top: 25
   .thumbs { order: 2; flex-direction: row; margin-top: 10px; overflow: auto; }
   .thumbs img, .thumbs .img-ph { width: 70px; height: 70px; }
   .main-image { height: 480px; }
-  .product-info h1 { font-size: 48px; font-weight: 700; }
+  .product-info h1,
+  .product-detail .info h1 {
+    font-size: clamp(34px, 9vw, 44px);
+    font-weight: 600;
+    line-height: 1.15;
+  }
   .buy-row { flex-direction: column; }
   .buy-row .quantity { align-self: start; }
   .cart-layout { grid-template-columns: 1fr; }
