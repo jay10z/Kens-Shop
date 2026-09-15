@@ -1,5 +1,5 @@
-import supabase from './db-client.js';
-import { isValidCameroonPhone, isValidEmail, normalizeCameroonPhone } from './phone.js';
+import supabase from './_lib/db-client.js';
+import { isValidCameroonPhone, isValidEmail, normalizeCameroonPhone } from './_lib/phone.js';
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

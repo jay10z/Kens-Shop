@@ -1,10 +1,10 @@
-import supabase from './db-client.js';
+import supabase from './_lib/db-client.js';
 import {
   buildEventCounts,
   decorateProduct,
   getTrendingCutoffISO,
   rankProducts,
-} from './ranking.js';
+} from './_lib/ranking.js';
 
 async function admin(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');

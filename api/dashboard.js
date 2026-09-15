@@ -1,4 +1,4 @@
-import supabase from './db-client.js';
+import supabase from './_lib/db-client.js';
 import {
   buildEventCounts,
   decorateProduct,
@@ -7,8 +7,8 @@ import {
   productsRunningLow,
   topTrending,
   topBestSellers,
-} from './ranking.js';
-import { decorateCustomers, summarizeCustomers } from './customerStats.js';
+} from './_lib/ranking.js';
+import { decorateCustomers, summarizeCustomers } from './_lib/customerStats.js';
 
 const emptyDashboard = {
   totalProducts: 0,

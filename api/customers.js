@@ -1,5 +1,5 @@
-import supabase from './db-client.js';
-import { decorateCustomers, matchesCustomerQuery, summarizeCustomers } from './customerStats.js';
+import supabase from './_lib/db-client.js';
+import { decorateCustomers, matchesCustomerQuery, summarizeCustomers } from './_lib/customerStats.js';
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

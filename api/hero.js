@@ -1,4 +1,4 @@
-import supabase from './db-client.js';
+import supabase from './_lib/db-client.js';
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

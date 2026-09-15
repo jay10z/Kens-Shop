@@ -1,4 +1,4 @@
-import supabase from './db-client.js';
+import supabase from './_lib/db-client.js';
 
 const BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'product-images';
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB raw (after client compress this is plenty)

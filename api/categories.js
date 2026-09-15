@@ -1,4 +1,4 @@
-import supabase from './db-client.js';
+import supabase from './_lib/db-client.js';
 
 function slugify(name) {
   return String(name || '')
