@@ -1081,6 +1081,8 @@ function AdminProducts(){
   const [error,setError]=useState('');
   const [loading,setLoading]=useState(true);
   const [toast,setToast]=useState('');
+  const [toastTone,setToastTone]=useState<'ok'|'err'>('ok');
+  const [classifyingId,setClassifyingId]=useState<string|number|null>(null);
   const {session}=useAuth();
   const {t}=useI18n();
   const load=()=>{
@@ -1097,15 +1099,36 @@ function AdminProducts(){
     try{
       await api('/api/products',{method:'DELETE',headers:authHeaders(session?.access_token),body:JSON.stringify({id})});
       setToast(t('admin.productDeleted'));
+      setToastTone('ok');
       load();
     }catch(e:any){setError(e.message||t('admin.productSaveError'))}
   };
-  const audienceLabel=(p:Product)=>{
-    const g=normalizeTargetGender(p.target_gender);
+  const audienceLabel=(g:ReturnType<typeof normalizeTargetGender>)=>{
     if(!g)return t('admin.audienceUnset');
     if(g==='men')return t('admin.audienceMen');
     if(g==='women')return t('admin.audienceWomen');
     return t('admin.audienceUnisex');
+  };
+  const quickClassify=async(product:Product,gender:TargetGender)=>{
+    if(!session?.access_token||classifyingId!=null)return;
+    const prev=product.target_gender;
+    setClassifyingId(product.id);
+    setProducts(list=>list.map(p=>p.id===product.id?{...p,target_gender:gender}:p));
+    try{
+      await api('/api/products',{
+        method:'PUT',
+        headers:authHeaders(session.access_token),
+        body:JSON.stringify({id:product.id,target_gender:gender}),
+      });
+      setToast(t('admin.audienceClassified'));
+      setToastTone('ok');
+    }catch(e:any){
+      setProducts(list=>list.map(p=>p.id===product.id?{...p,target_gender:prev}:p));
+      setToast(e?.message||t('admin.audienceClassifyError'));
+      setToastTone('err');
+    }finally{
+      setClassifyingId(null);
+    }
   };
   const visible=products.filter(p=>{
     if(!p.name.toLowerCase().includes(q.toLowerCase()))return false;
@@ -1129,10 +1152,44 @@ function AdminProducts(){
       ))}
     </div>
     {loading?<Loading/>:error&&!products.length?<Empty text={error} action={<button type="button" className="btn dark-btn" onClick={load}>{t('common.retry')}</button>}/>:(
-      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.audience')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{visible.map(p=><tr key={p.id}><td><div className="table-product"><ProductImage src={productCoverImage(p.images)} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td><td>{p.category?.name}</td><td><span className={`audience-badge${normalizeTargetGender(p.target_gender)?'':' unset'}`}>{audienceLabel(p)}</span></td><td>{money(p.price)}</td><td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td><td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>{t('admin.table.product')}</th><th>{t('admin.table.category')}</th><th>{t('admin.table.audience')}</th><th>{t('admin.table.price')}</th><th>{t('admin.table.stock')}</th><th><span className="sr-only">{t('common.edit')}</span></th></tr></thead><tbody>{visible.map(p=>{
+        const g=normalizeTargetGender(p.target_gender);
+        const busyRow=classifyingId===p.id;
+        return <tr key={p.id}>
+          <td><div className="table-product"><ProductImage src={productCoverImage(p.images)} alt=""/><div><b>{p.name}</b><span>{p.short_description}</span></div></div></td>
+          <td>{p.category?.name}</td>
+          <td>
+            <div className="audience-cell">
+              <span className={`audience-badge ${g||'unset'}`}>{audienceLabel(g)}</span>
+              {!g&&(
+                <div className="audience-quick" role="group" aria-label={t('admin.modal.targetAudience')}>
+                  {([
+                    ['men','audienceMen'],
+                    ['women','audienceWomen'],
+                    ['unisex','audienceUnisex'],
+                  ] as const).map(([val,label])=>(
+                    <button
+                      key={val}
+                      type="button"
+                      className={`audience-quick-btn tone-${val}`}
+                      disabled={busyRow||classifyingId!=null}
+                      onClick={()=>quickClassify(p,val)}
+                    >
+                      {t(`admin.${label}`)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </td>
+          <td>{money(p.price)}</td>
+          <td><Stock n={p.stock_quantity} threshold={p.low_stock_threshold} priority={p.stockPriority}/></td>
+          <td><button type="button" onClick={()=>setEditing(p)} aria-label={t('common.edit')}><Pencil/></button><button type="button" onClick={()=>del(p.id)} aria-label={t('common.delete')}><Trash2/></button></td>
+        </tr>;
+      })}</tbody></table></div>
     )}
-    {editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>{setEditing(null);setError('')}} done={()=>{setEditing(null);setToast(t('admin.productSaved'));load()}} error={error} setError={setError}/>}
-    <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
+    {editing&&<ProductModal item={editing} cats={cats} token={session?.access_token} close={()=>{setEditing(null);setError('')}} done={()=>{setEditing(null);setToastTone('ok');setToast(t('admin.productSaved'));load()}} error={error} setError={setError}/>}
+    <AnimatePresence>{toast&&<Toast text={toast} tone={toastTone} onClose={()=>setToast('')}/>}</AnimatePresence>
   </section></AdminShell>;
 }
 function Stock({n,threshold=5,priority}:{n:number;threshold?:number;priority?:number}){
@@ -1379,22 +1436,25 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
             </div>
             <div className="form-identity-block">
               <span id="target-audience-label">{t('admin.modal.targetAudience')}</span>
-              <div className="audience-radios" role="radiogroup" aria-labelledby="target-audience-label">
+              {!form.target_gender&&(
+                <p className="audience-need-classify" role="status">{t('admin.modal.audienceNeedsClassification')}</p>
+              )}
+              <div className="audience-segment" role="radiogroup" aria-labelledby="target-audience-label">
                 {([
                   ['men','audienceMen'],
                   ['women','audienceWomen'],
                   ['unisex','audienceUnisex'],
                 ] as const).map(([val,label])=>(
-                  <label key={val}>
-                    <input
-                      type="radio"
-                      name="target_gender"
-                      value={val}
-                      checked={form.target_gender===val}
-                      onChange={()=>set('target_gender',val)}
-                    />
+                  <button
+                    key={val}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.target_gender===val}
+                    className={`audience-segment-btn tone-${val}${form.target_gender===val?' is-active':''}`}
+                    onClick={()=>set('target_gender',val)}
+                  >
                     {t(`admin.modal.${label}`)}
-                  </label>
+                  </button>
                 ))}
               </div>
               <small>{t('admin.modal.targetAudienceHelp')}</small>

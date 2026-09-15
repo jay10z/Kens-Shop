@@ -289,6 +289,8 @@ export const translations = {
       audienceWomen: 'Women',
       audienceUnisex: 'Unisex',
       audienceUnset: 'Audience not set',
+      audienceClassified: 'Audience updated.',
+      audienceClassifyError: 'Could not update audience. Please try again.',
       table: {
         product: 'Product',
         category: 'Category',
@@ -409,6 +411,7 @@ export const translations = {
         productTypeHelp: 'Category describes what the product is (e.g. watches, perfumes).',
         targetAudience: 'Target audience',
         targetAudienceHelp: 'Who this product is for. Separate from category.',
+        audienceNeedsClassification: 'Not classified yet — choose Men, Women or Unisex.',
         audienceMen: 'Men',
         audienceWomen: 'Women',
         audienceUnisex: 'Unisex',
@@ -770,6 +773,8 @@ export const translations = {
       audienceWomen: 'Femmes',
       audienceUnisex: 'Unisexe',
       audienceUnset: 'Public non défini',
+      audienceClassified: 'Public cible mis à jour.',
+      audienceClassifyError: 'Impossible de mettre à jour le public. Réessayez.',
       table: {
         product: 'Produit',
         category: 'Catégorie',
@@ -890,6 +895,7 @@ export const translations = {
         productTypeHelp: 'La catégorie décrit ce qu\'est le produit (ex. montres, parfums).',
         targetAudience: 'Public cible',
         targetAudienceHelp: 'Pour qui est ce produit. Distinct de la catégorie.',
+        audienceNeedsClassification: 'Non classé — choisissez Homme, Femme ou Unisexe.',
         audienceMen: 'Homme',
         audienceWomen: 'Femme',
         audienceUnisex: 'Unisexe',
