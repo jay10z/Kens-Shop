@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { CartProvider } from './contexts/CartContext';
 import App from './App';
+import { initAnalytics } from './lib/analytics';
 import { isSupabaseConfigured, supabaseConfigError } from './lib/supabase';
 import './index.css';
 
@@ -24,6 +25,7 @@ if (!isSupabaseConfigured) {
     </div>
   `;
 } else {
+  initAnalytics();
   createRoot(root).render(
     <StrictMode>
       <BrowserRouter>

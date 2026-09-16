@@ -29,6 +29,13 @@ import {
   statusMatchesFilter,
   toCanonicalStatus,
 } from './lib/orderStatus';
+import {
+  GaRouteTracker,
+  trackAddToCart,
+  trackBeginCheckout,
+  trackPurchase,
+  trackViewItem,
+} from './lib/analytics';
 import { I18nProvider, useI18n } from './i18n/Context';
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
@@ -114,8 +121,10 @@ function resolveStockPriority(p:{stock_quantity?:number;low_stock_threshold?:num
 function InventoryBadge({p}:{p:Product}){
   const {t}=useI18n();
   const level=resolveStockPriority(p);
-  const label=level===1?t('product.inStock'):level===2?t('product.limitedStock'):t('product.outOfStock');
-  const tone=level===1?'ok':level===2?'low':'out';
+  // Storefront: only Available vs Out — never expose low-stock thresholds/qty to customers.
+  const available=level!==3;
+  const label=available?t('product.inStock'):t('product.outOfStock');
+  const tone=available?'ok':'out';
   return <span className={`inventory-badge tone-${tone}`}>{label}</span>;
 }
 function Toast({text,onClose,tone='ok'}:{text:string;onClose:()=>void;tone?:'ok'|'err'|'info'}){
@@ -502,6 +511,13 @@ function ProductCard({p,onAdded}:{p:Product;onAdded?:()=>void}){
   const short=rawShort && rawShort.toLowerCase()!==String(p.name||'').trim().toLowerCase() ? rawShort : '';
   const trackCart = () => {
     api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);
+    trackAddToCart({
+      id: p.id,
+      name: p.name,
+      category: p.category?.name || null,
+      price: Number(p.price),
+      quantity: 1,
+    });
   };
   return <article className="product-card">
     <Link to={`/product/${p.slug}`} className="product-image">
@@ -751,6 +767,12 @@ function ProductDetail(){
       setModel(d.product?.models?.[0]);
       if(d.product){
         api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: d.product.id, event_type: 'view'})}).catch(console.error);
+        trackViewItem({
+          id: d.product.id,
+          name: d.product.name,
+          category: d.product.category?.name || null,
+          price: Number(d.product.price),
+        });
       }
     }).catch(()=>setError(t('product.notFound'))).finally(()=>setLoading(false))
   },[slug]);
@@ -771,14 +793,25 @@ function ProductDetail(){
         <h1>{p.name}</h1>
         {short?<p className="product-short detail-short">{short}</p>:null}
         <p className="price">{money(p.price)}</p>
-        <p className={`inventory-status tone-${level===1?'ok':level===2?'low':'out'}`}>
-          {level===1?t('product.inStock'):level===2?t('product.limitedStock'):t('product.outOfStock')}
+        <p className={`inventory-status tone-${level===3?'out':'ok'}`}>
+          {level===3?t('product.outOfStock'):t('product.inStock')}
         </p>
         {(p.colors?.length>0||p.models?.length>0)&&<div className="options">
           {p.colors?.length>0&&<div><span id="opt-color">{t('product.color')}</span><div role="group" aria-labelledby="opt-color">{p.colors.map(c=><button type="button" key={c} className={`opt ${color===c?'active':''}`} onClick={()=>setColor(c)} aria-pressed={color===c}>{c}</button>)}</div></div>}
           {p.models?.length>0&&<div><span id="opt-model">{t('product.model')}</span><div role="group" aria-labelledby="opt-model">{p.models.map(m=><button type="button" key={m} className={`opt ${model===m?'active':''}`} onClick={()=>setModel(m)} aria-pressed={model===m}>{m}</button>)}</div></div>}
         </div>}
-        <button type="button" className="btn gold-btn" onClick={()=>{add(p,1,color,model);setToast(t('home.addedToBag'));api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);}} disabled={level===3}>{level===3?t('product.outOfStock'):t('product.addToCart')}</button>
+        <button type="button" className="btn gold-btn" onClick={()=>{
+          add(p,1,color,model);
+          setToast(t('home.addedToBag'));
+          api('/api/track', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_id: p.id, event_type: 'cart'})}).catch(console.error);
+          trackAddToCart({
+            id: p.id,
+            name: p.name,
+            category: p.category?.name || null,
+            price: Number(p.price),
+            quantity: 1,
+          });
+        }} disabled={level===3}>{level===3?t('product.outOfStock'):t('product.addToCart')}</button>
         {longDesc?(
           <div className="detail-description">
             <p className="eyebrow">{t('product.descriptionTitle')}</p>
@@ -870,6 +903,16 @@ function Cart(){
       const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(!d?.order_number)throw new Error(t('cart.orderError'));
 
+      trackPurchase({
+        value: Number(total) || 0,
+        items: snapshot.map((x)=>({
+          id: x.product_id,
+          name: x.product_name,
+          price: Number(x.price),
+          quantity: Number(x.quantity) || 1,
+        })),
+      });
+
       const message=buildWhatsAppOrderMessage({
         orderNumber:d.order_number,
         lines:snapshot.map((x)=>x.line),
@@ -942,7 +985,19 @@ function Cart(){
     </div>
   );
 
-  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{step==='customer'?t('cart.customerStepEyebrow'):t('cart.eyebrow')}</p><h1>{step==='customer'?t('cart.customerStepTitle'):t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout">{step==='cart'?<div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={productCoverImage(x.product.images)} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div>:<aside className="summary checkout-customer-panel">{customerForm}</aside>}<aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div>{step==='cart'?<button type="button" className="btn gold-btn" onClick={()=>setStep('customer')}>{t('cart.continueToCustomer')}</button>:<button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>}{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p>{step==='customer'?<button type="button" className="text-link checkout-back" onClick={()=>setStep('cart')}><ChevronLeft/> {t('cart.backToCart')}</button>:<Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link>}</aside></div>:<Empty text={waLink?t('cart.orderSentTitle'):t('cart.emptyText')} action={emptyAction}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
+  return <Layout><section className="cart-page"><div className="section-head"><div><p className="eyebrow gold">{step==='customer'?t('cart.customerStepEyebrow'):t('cart.eyebrow')}</p><h1>{step==='customer'?t('cart.customerStepTitle'):t('cart.title')}</h1></div><span>{items.length} {items.length===1?t('cart.pieces'):t('cart.piecesPlural')}</span></div>{items.length?<div className="cart-layout">{step==='cart'?<div>{items.map((x:any,i:number)=><article className="cart-item" key={`${x.product.id}-${x.color||''}-${x.model||''}-${i}`}><ProductImage src={productCoverImage(x.product.images)} alt={x.product.name}/><div><h3>{x.product.name}</h3><p>{[x.color,x.model].filter(Boolean).join(' · ')}</p><strong>{money(x.product.price)}</strong><div className="quantity"><button type="button" onClick={()=>update(i,x.quantity-1)} aria-label={t('common.decreaseQty')}><Minus/></button><span aria-live="polite">{x.quantity}</span><button type="button" onClick={()=>update(i,x.quantity+1)} aria-label={t('common.increaseQty')}><Plus/></button></div></div><button type="button" className="remove" onClick={()=>remove(i)} aria-label={t('common.removeItem')}><Trash2/></button></article>)}</div>:<aside className="summary checkout-customer-panel">{customerForm}</aside>}<aside className="summary"><p className="eyebrow">{t('cart.summaryEyebrow')}</p><div><span>{t('cart.subtotal')}</span><b>{money(total)}</b></div><div><span>{t('cart.delivery')}</span><b>{t('cart.deliveryNote')}</b></div><hr/><div className="grand"><span>{t('cart.total')}</span><b>{money(total)}</b></div>{step==='cart'?<button type="button" className="btn gold-btn" onClick={()=>{
+          trackBeginCheckout({
+            value: Number(total) || 0,
+            items: items.map((x:any)=>({
+              id: x.product.id,
+              name: x.product.name,
+              category: x.product.category?.name || null,
+              price: Number(x.product.price),
+              quantity: Number(x.quantity) || 1,
+            })),
+          });
+          setStep('customer');
+        }}>{t('cart.continueToCustomer')}</button>:<button type="button" className="btn gold-btn" onClick={order} disabled={ordering} aria-busy={ordering}>{ordering?<Loader2 className="spin"/>:<MessageCircle/>} {ordering?t('cart.ordering'):t('cart.orderBtn')}</button>}{error&&<p className="error" role="alert">{error}</p>}<p className="fine">{t('cart.finePrint')}</p>{step==='customer'?<button type="button" className="text-link checkout-back" onClick={()=>setStep('cart')}><ChevronLeft/> {t('cart.backToCart')}</button>:<Link to="/shop"><ChevronLeft/> {t('cart.continue')}</Link>}</aside></div>:<Empty text={waLink?t('cart.orderSentTitle'):t('cart.emptyText')} action={emptyAction}/>}</section><AnimatePresence>{toast&&<Toast text={toast.text} tone={toast.tone} onClose={()=>setToast(null)}/>}</AnimatePresence></Layout>
 }
 function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty" role="status"><Gem aria-hidden="true"/><h3>{text}</h3>{action}</div>}
 function useAdminNoIndex(){useEffect(()=>{const meta=document.createElement('meta');meta.name='robots';meta.content='noindex, nofollow, noarchive';document.head.appendChild(meta);const oldTitle=document.title;document.title='Private Portal';return()=>{meta.remove();document.title=oldTitle}},[])}
@@ -1936,5 +1991,5 @@ function CustomerDrawer({customer,close}:any){
   </aside></div>;
 }
 export default function App(){
-  return <ThemeProvider><I18nProvider><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="/admin/customers" element={<Protected><AdminCustomers/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
+  return <ThemeProvider><I18nProvider><GaRouteTracker/><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="/admin/customers" element={<Protected><AdminCustomers/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
 }
