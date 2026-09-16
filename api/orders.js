@@ -1,14 +1,12 @@
 import supabase from './_lib/db-client.js';
 import { isValidCameroonPhone, isValidEmail, normalizeCameroonPhone } from './_lib/phone.js';
+import { isKnownOrderStatus, statusForStorage } from './_lib/orderStatus.js';
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
-
-const ORDER_STATUSES = ['Pending', 'Confirmed', 'Processing', 'Delivered', 'Cancelled'];
-const LEGACY_STATUSES = ['Discussing on WhatsApp', 'Preparing', 'Out for Delivery'];
 
 async function isAdmin(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -344,13 +342,17 @@ export default async function handler(req, res) {
     if (req.method === 'PUT') {
       const { id, status } = req.body || {};
       if (!id) return res.status(400).json({ error: 'Missing order.', code: 'INVALID_ORDER' });
-      if (!ORDER_STATUSES.includes(status) && !LEGACY_STATUSES.includes(status)) {
+      if (!isKnownOrderStatus(status)) {
+        return res.status(400).json({ error: 'Invalid order status.', code: 'INVALID_STATUS' });
+      }
+      const nextStatus = statusForStorage(status);
+      if (!nextStatus) {
         return res.status(400).json({ error: 'Invalid order status.', code: 'INVALID_STATUS' });
       }
 
       const { data, error } = await supabase
         .from('orders')
-        .update({ status, updated_at: new Date().toISOString() })
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
         .eq('id', id)
         .select()
         .single();

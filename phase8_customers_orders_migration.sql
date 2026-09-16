@@ -1,18 +1,33 @@
 -- Phase 8 — Additive customers + order intelligence (SAFE)
--- Run in Supabase SQL Editor on the LIVE database.
+-- First successful production application of Phase 8.
+-- Run once in Supabase SQL Editor on the LIVE database.
 --
 -- Why:
 --   Guest checkout needs a customers table, phone matching, and orders.customer_id.
 --   The live orders table currently has no customer_name / whatsapp_number / customer_id.
 --
--- Safe / idempotent:
---   - CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS only
---   - no DROP of tables
---   - no deletion of products, orders, or order_items
---   - existing orders stay valid (customer_id is nullable; historical rows are not backfilled)
---   - legacy order statuses remain allowed so existing CHECK rows are not rewritten
+-- Status compatibility (PostgreSQL CHECK is case-sensitive):
+--   Production already contains lowercase 'pending' and 'delivered'.
+--   The application also uses PascalCase + legacy title-case statuses.
+--   This migration widens the allowlist to cover known real values only.
+--   It does NOT UPDATE or normalize existing order rows.
 --
--- After running: existing products, orders, and order_items must still be present.
+-- Safe / mostly idempotent:
+--   - CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS
+--   - CREATE INDEX IF NOT EXISTS
+--   - guarded foreign key (orders_customer_id_fkey)
+--   - guarded status CHECK replace (drop known status-IN constraints, then ADD IF missing)
+--   - no DROP of tables
+--   - no DELETE/UPDATE of products, orders, or order_items
+--   - no customer_id backfill (historical rows stay NULL)
+--
+-- Not perfectly idempotent:
+--   - Re-running after a partial failure mid-transaction is safe (BEGIN/COMMIT).
+--   - Re-running after success is mostly safe; the status CHECK block drops then
+--     re-adds only when orders_status_check is missing after the drop loop.
+--
+-- After running: existing products, orders, and order_items must still be present
+-- with unchanged row counts and unchanged status values.
 
 BEGIN;
 
@@ -70,38 +85,57 @@ ALTER TABLE public.orders
   ADD COLUMN IF NOT EXISTS customer_name TEXT,
   ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
 
--- ── 3) Order lifecycle ───────────────────────────────────────────────────────
--- New canonical values: Pending, Confirmed, Processing, Delivered, Cancelled
--- Legacy values are kept so existing rows remain valid.
--- Drop any existing status CHECK (name may differ between environments).
+-- ── 3) Order status CHECK — controlled replace ───────────────────────────────
+-- Known real values only:
+--   App canonical: Pending, Confirmed, Processing, Delivered, Cancelled
+--   App legacy:    Discussing on WhatsApp, Preparing, Out for Delivery
+--   Production:    pending, delivered
+--
+-- Drop only CHECK constraints that actually restrict orders.status via
+-- a "status IN (...)" definition. Do not drop unrelated CHECKs that merely
+-- mention the word "status".
+ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS orders_status_check;
+
 DO $$
 DECLARE
   r RECORD;
 BEGIN
   FOR r IN
-    SELECT conname
-    FROM pg_constraint
-    WHERE conrelid = 'public.orders'::regclass
-      AND contype = 'c'
-      AND pg_get_constraintdef(oid) ILIKE '%status%'
+    SELECT c.conname
+    FROM pg_constraint c
+    JOIN pg_class rel ON rel.oid = c.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'orders'
+      AND c.contype = 'c'
+      AND pg_get_constraintdef(c.oid) ~* '\ystatus\y\s+IN\s*\('
   LOOP
     EXECUTE format('ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS %I', r.conname);
   END LOOP;
 END $$;
 
-ALTER TABLE public.orders
-  ADD CONSTRAINT orders_status_check CHECK (
-    status IN (
-      'Pending',
-      'Confirmed',
-      'Processing',
-      'Delivered',
-      'Cancelled',
-      'Discussing on WhatsApp',
-      'Preparing',
-      'Out for Delivery'
-    )
-  );
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_status_check'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD CONSTRAINT orders_status_check CHECK (
+        status IN (
+          'Pending',
+          'Confirmed',
+          'Processing',
+          'Delivered',
+          'Cancelled',
+          'Discussing on WhatsApp',
+          'Preparing',
+          'Out for Delivery',
+          'pending',
+          'delivered'
+        )
+      );
+  END IF;
+END $$;
 
 COMMIT;
 
@@ -113,11 +147,22 @@ ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
 
 NOTIFY pgrst, 'reload schema';
 
--- ── Verification (run after the migration) ──────────────────────────────────
+-- ── Verification (read-only; run separately AFTER the migration) ────────────
 /*
 SELECT COUNT(*) AS products FROM public.products;
 SELECT COUNT(*) AS orders FROM public.orders;
 SELECT COUNT(*) AS order_items FROM public.order_items;
+
+SELECT status, COUNT(*) AS n
+FROM public.orders
+GROUP BY status
+ORDER BY status;
+
+SELECT COUNT(*) AS customers FROM public.customers;
+
+SELECT COUNT(*) AS orders_without_customer
+FROM public.orders
+WHERE customer_id IS NULL;
 
 SELECT column_name
 FROM information_schema.columns
@@ -128,5 +173,10 @@ SELECT column_name
 FROM information_schema.columns
 WHERE table_schema = 'public'
   AND table_name = 'orders'
-  AND column_name IN ('customer_id', 'customer_name', 'whatsapp_number', 'status');
+  AND column_name IN ('customer_id', 'customer_name', 'whatsapp_number', 'status')
+ORDER BY column_name;
+
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conname = 'orders_status_check';
 */

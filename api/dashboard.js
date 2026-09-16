@@ -9,6 +9,7 @@ import {
   topBestSellers,
 } from './_lib/ranking.js';
 import { decorateCustomers, summarizeCustomers } from './_lib/customerStats.js';
+import { isDeliveredStatus, isPendingStatus } from './_lib/orderStatus.js';
 
 const emptyDashboard = {
   totalProducts: 0,
@@ -83,6 +84,14 @@ function buildBusinessInsights(products = []) {
 
 const QUERY_TIMEOUT_MS = 10000;
 
+function isMissingCustomersTable(error) {
+  const msg = String(error?.message || error || '');
+  return (
+    /Could not find the table ['"]?public\.customers['"]?/i.test(msg) ||
+    /relation ["']?public\.?customers["']? does not exist/i.test(msg)
+  );
+}
+
 function withTimeout(promise, ms, label) {
   return Promise.race([
     promise,
@@ -141,7 +150,7 @@ export default async function handler(req, res) {
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     // Independent soft queries — one failure must not block the whole dashboard
-    const [pResult, oResult, itemsResult, eventsResult, cResult] = await Promise.all([
+    const [pResult, oResult, itemsResult, eventsResult, cResultRaw] = await Promise.all([
       softQuery('products', () => supabase.from('products').select('*')),
       softQuery('orders', () =>
         supabase.from('orders').select('*').order('created_at', { ascending: false })
@@ -155,6 +164,15 @@ export default async function handler(req, res) {
       ),
       softQuery('customers', () => supabase.from('customers').select('*')),
     ]);
+
+    // Soft-compat: if customers is missing, keep empty customer metrics (do not hard-fail).
+    let cResult = cResultRaw;
+    if (cResultRaw.error && isMissingCustomersTable(cResultRaw.error)) {
+      console.warn(
+        '[dashboard] customers table missing — showing empty customer metrics'
+      );
+      cResult = { data: [], error: null, warning: null };
+    }
 
     for (const r of [pResult, oResult, itemsResult, eventsResult, cResult]) {
       if (r.warning) warnings.push(r.warning);
@@ -191,7 +209,7 @@ export default async function handler(req, res) {
         .sort((a, b) => b.revenue - a.revenue)[0] || null;
 
     const today = new Date().toISOString().slice(0, 10);
-    const delivered = o.filter((x) => x.status === 'Delivered');
+    const delivered = o.filter((x) => isDeliveredStatus(x.status));
     const customerSummary = summarizeCustomers(decorateCustomers(cResult.data || [], o));
 
     const criticalFailure = Boolean(pResult.error);
@@ -202,7 +220,7 @@ export default async function handler(req, res) {
       lowStock,
       outOfStock,
       ordersToday: o.filter((x) => String(x.created_at || '').slice(0, 10) === today).length,
-      pending: o.filter((x) => x.status === 'Pending').length,
+      pending: o.filter((x) => isPendingStatus(x.status)).length,
       delivered: delivered.length,
       revenue: delivered.reduce((s, x) => s + Number(x.total), 0),
       totalOrders: o.length,

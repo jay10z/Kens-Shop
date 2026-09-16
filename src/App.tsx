@@ -24,6 +24,11 @@ import {
   readWhatsAppFallback,
   storeWhatsAppFallback,
 } from './lib/whatsappOrder';
+import {
+  CANONICAL_ORDER_STATUSES,
+  statusMatchesFilter,
+  toCanonicalStatus,
+} from './lib/orderStatus';
 import { I18nProvider, useI18n } from './i18n/Context';
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
@@ -1554,21 +1559,12 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     </form>
   </div>
 }
-const ORDER_STATUSES=['Pending','Confirmed','Processing','Delivered','Cancelled'];
-function canonicalStatus(status:string){
-  if(status==='Discussing on WhatsApp')return 'Pending';
-  if(status==='Preparing'||status==='Out for Delivery')return 'Processing';
-  return status||'Pending';
-}
-function statusMatchesFilter(status:string,filter:string){
-  if(filter==='All')return true;
-  return canonicalStatus(status)===filter;
-}
+const ORDER_STATUSES = [...CANONICAL_ORDER_STATUSES];
 function Status({status}:{status:string}){
   const {t}=useI18n();
-  const key=canonicalStatus(status);
+  const key=toCanonicalStatus(status);
   const label=t(`admin.orderStatuses.${status}`)||t(`admin.orderStatuses.${key}`)||status;
-  return <span className={`status s-${key.toLowerCase().replaceAll(' ','-')}`}>{label}</span>;
+  return <span className={`status s-${String(key).toLowerCase().replaceAll(' ','-')}`}>{label}</span>;
 }
 function AdminHero(){
   const [slides,setSlides]=useState<any[]>([]);
@@ -1833,7 +1829,7 @@ function AdminOrders(){
   </section></AdminShell>;
 }
 function OrderDrawer({order,token,close,done}:any){
-  const [status,setStatus]=useState(canonicalStatus(order.status));
+  const [status,setStatus]=useState(toCanonicalStatus(order.status));
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [toast,setToast]=useState('');

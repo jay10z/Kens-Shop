@@ -1,8 +1,4 @@
-const CANCELLED = 'Cancelled';
-
-function isCancelled(status) {
-  return String(status || '') === CANCELLED;
-}
+import { isCancelledStatus } from './orderStatus.js';
 
 /** New = exactly one order. Returning = more than one order. */
 export function customerTypeFromCount(orderCount) {
@@ -34,7 +30,7 @@ export function decorateCustomers(customers = [], orders = []) {
     const row = byId.get(cid);
     row.orders.push(order);
     row.order_count += 1;
-    if (!isCancelled(order.status)) {
+    if (!isCancelledStatus(order.status)) {
       row.total_spent += Number(order.total) || 0;
     }
     if (!row.last_order_at || String(order.created_at) > String(row.last_order_at)) {
@@ -44,7 +40,7 @@ export function decorateCustomers(customers = [], orders = []) {
 
   return [...byId.values()].map((row) => {
     const { orders: history, ...rest } = row;
-    const paidCount = history.filter((o) => !isCancelled(o.status)).length;
+    const paidCount = history.filter((o) => !isCancelledStatus(o.status)).length;
     return {
       ...rest,
       customer_type: customerTypeFromCount(rest.order_count),
