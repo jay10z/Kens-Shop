@@ -1001,11 +1001,99 @@ function Cart(){
 }
 function Empty({text,action}:{text:string;action?:React.ReactNode}){return <div className="empty" role="status"><Gem aria-hidden="true"/><h3>{text}</h3>{action}</div>}
 function useAdminNoIndex(){useEffect(()=>{const meta=document.createElement('meta');meta.name='robots';meta.content='noindex, nofollow, noarchive';document.head.appendChild(meta);const oldTitle=document.title;document.title='Private Portal';return()=>{meta.remove();document.title=oldTitle}},[])}
-function Protected({children}:{children:React.ReactNode}){const {user,loading}=useAuth();if(loading)return <Loading/>;return user?children:<Navigate to="/admin/login" replace/>}
+function Protected({children}:{children:React.ReactNode}){
+  const {user,session,loading}=useAuth();
+  const [adminState,setAdminState]=useState<'loading'|'yes'|'no'>('loading');
+  useEffect(()=>{
+    if(loading)return;
+    if(!user||!session?.access_token){setAdminState('no');return;}
+    let cancelled=false;
+    setAdminState('loading');
+    api('/api/admin-me',{headers:{Authorization:`Bearer ${session.access_token}`}})
+      .then((d)=>{
+        if(cancelled)return;
+        if(d?.admin){setAdminState('yes');return;}
+        setAdminState('no');
+        supabase?.auth.signOut().catch(()=>{/* ignore */});
+      })
+      .catch(()=>{
+        if(cancelled)return;
+        setAdminState('no');
+        supabase?.auth.signOut().catch(()=>{/* ignore */});
+      });
+    return()=>{cancelled=true};
+  },[loading,user,session?.access_token]);
+  if(loading||(user&&adminState==='loading'))return <Loading/>;
+  if(!user||adminState!=='yes')return <Navigate to="/admin/login" replace/>;
+  return children;
+}
 function Login(){
-  useAdminNoIndex();const {user}=useAuth();const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false);const {t}=useI18n();
-  if(user)return <Navigate to="/admin/dashboard" replace/>;
-  const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');if(!supabase){setError(t('admin.invalidLogin'));setBusy(false);return;}const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setError(t('admin.invalidLogin'));setBusy(false)};
+  useAdminNoIndex();
+  const {user,session}=useAuth();
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [checkingAdmin,setCheckingAdmin]=useState(!!user);
+  const [isAdmin,setIsAdmin]=useState(false);
+  const {t}=useI18n();
+
+  useEffect(()=>{
+    if(!user||!session?.access_token){
+      setCheckingAdmin(false);
+      setIsAdmin(false);
+      return;
+    }
+    let cancelled=false;
+    setCheckingAdmin(true);
+    api('/api/admin-me',{headers:{Authorization:`Bearer ${session.access_token}`}})
+      .then((d)=>{
+        if(cancelled)return;
+        if(d?.admin){setIsAdmin(true);return;}
+        setIsAdmin(false);
+        setError(t('admin.invalidLogin'));
+        supabase?.auth.signOut().catch(()=>{/* ignore */});
+      })
+      .catch(()=>{
+        if(cancelled)return;
+        setIsAdmin(false);
+        setError(t('admin.invalidLogin'));
+        supabase?.auth.signOut().catch(()=>{/* ignore */});
+      })
+      .finally(()=>{if(!cancelled)setCheckingAdmin(false)});
+    return()=>{cancelled=true};
+  },[user,session?.access_token,t]);
+
+  if(checkingAdmin)return <Loading/>;
+  if(user&&isAdmin)return <Navigate to="/admin/dashboard" replace/>;
+
+  const submit=async(e:FormEvent)=>{
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    if(!supabase){setError(t('admin.invalidLogin'));setBusy(false);return;}
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    if(error||!data.session?.access_token){
+      setError(t('admin.invalidLogin'));
+      setBusy(false);
+      return;
+    }
+    try{
+      const me=await api('/api/admin-me',{headers:{Authorization:`Bearer ${data.session.access_token}`}});
+      if(!me?.admin){
+        await supabase.auth.signOut();
+        setError(t('admin.invalidLogin'));
+        setBusy(false);
+        return;
+      }
+      setIsAdmin(true);
+    }catch{
+      await supabase.auth.signOut();
+      setError(t('admin.invalidLogin'));
+    }
+    setBusy(false);
+  };
+
   return <main className="login"><BrandMark className="inverse"/><div className="login-card"><p className="eyebrow gold">{t('admin.loginPortal')}</p><h1>{t('admin.loginTitle')}</h1><p>{t('admin.loginSub')}</p><form onSubmit={submit}><label>{t('admin.email')}<input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" required/></label><label>{t('admin.password')}<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" minLength={6} required/></label>{error&&<p className="error">{error}</p>}<button className="btn gold-btn" disabled={busy}>{busy?<Loader2 className="spin"/>:t('admin.signInBtn')}</button></form></div></main>
 }
 function AdminShell({children}:{children:React.ReactNode}){

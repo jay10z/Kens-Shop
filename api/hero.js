@@ -1,17 +1,11 @@
 import supabase from './_lib/db-client.js';
+import { isAdminRequest, requireAdmin } from './_lib/adminAuth.js';
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
-
-async function isAdmin(req) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return false;
-  const { data } = await supabase.auth.getUser(token);
-  return !!data.user;
-}
 
 function missingColumnFromError(error) {
   const msg = error?.message || '';
@@ -130,7 +124,7 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const admin = await isAdmin(req);
+      const admin = await isAdminRequest(req);
       let q = supabase.from('hero_slides').select('*').order('display_order', { ascending: true });
       if (!admin || req.query.admin !== 'true') {
         q = q.eq('enabled', true);
@@ -140,7 +134,7 @@ export default async function handler(req, res) {
       return res.status(200).json(data || []);
     }
 
-    if (!(await isAdmin(req))) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await requireAdmin(req, res))) return;
 
     if (req.method === 'POST') {
       const body = req.body || {};

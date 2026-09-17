@@ -9,6 +9,7 @@
 --   7) phase7_6_hero_category_destination_migration.sql  (hero_slides.category_id)
 --   8) phase8_customers_orders_migration.sql  (customers + orders.customer_id + status)
 --   9) phase9_target_gender_migration.sql  (products.target_gender: men|women|unisex)
+--  10) phase10_rls_hardening_migration.sql  (RLS on all public tables + SELECT policies)
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -146,6 +147,9 @@ CREATE INDEX IF NOT EXISTS idx_hero_slides_category_id ON hero_slides(category_i
 
 -- Customer records are admin/API-only (service role bypasses RLS).
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+
+-- Full RLS matrix for all public tables: see phase10_rls_hardening_migration.sql
+-- (public SELECT for catalog/content; deny-by-default for customers/orders/events).
 
 -- Note: Product image uploads require a PUBLIC Supabase Storage bucket named
 -- exactly `product-images` (see api/upload.js). The upload API can create it

@@ -1,4 +1,5 @@
 import supabase from './_lib/db-client.js';
+import { requireAdmin } from './_lib/adminAuth.js';
 import {
   buildEventCounts,
   decorateProduct,
@@ -124,30 +125,7 @@ export default async function handler(req, res) {
   const warnings = [];
 
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-    let user = null;
-    try {
-      const authResult = await withTimeout(
-        supabase.auth.getUser(token),
-        QUERY_TIMEOUT_MS,
-        'auth'
-      );
-      user = authResult?.data?.user || null;
-      if (authResult?.error) {
-        console.error('[dashboard] auth:', authResult.error.message);
-      }
-    } catch (e) {
-      console.error('[dashboard] auth:', e.message || e);
-      return res.status(200).json({
-        ...emptyDashboard,
-        error: 'Authentication timed out. Please refresh and try again.',
-        warnings: [`auth: ${e.message || 'timed out'}`],
-      });
-    }
-
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await requireAdmin(req, res))) return;
 
     // Independent soft queries — one failure must not block the whole dashboard
     const [pResult, oResult, itemsResult, eventsResult, cResultRaw] = await Promise.all([

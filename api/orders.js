@@ -1,4 +1,5 @@
 import supabase from './_lib/db-client.js';
+import { requireAdmin } from './_lib/adminAuth.js';
 import { isValidCameroonPhone, isValidEmail, normalizeCameroonPhone } from './_lib/phone.js';
 import { isKnownOrderStatus, statusForStorage } from './_lib/orderStatus.js';
 
@@ -7,13 +8,6 @@ const cors = (res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
-
-async function isAdmin(req) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return false;
-  const { data } = await supabase.auth.getUser(token);
-  return !!data.user;
-}
 
 function missingColumnFromError(error) {
   const msg = error?.message || '';
@@ -311,7 +305,7 @@ export default async function handler(req, res) {
       });
     }
 
-    if (!(await isAdmin(req))) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await requireAdmin(req, res))) return;
 
     if (req.method === 'GET') {
       const [ordersResult, itemsResult, productsResult] = await Promise.all([

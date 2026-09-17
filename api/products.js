@@ -1,17 +1,11 @@
 import supabase from './_lib/db-client.js';
+import { isAdminRequest, requireAdmin } from './_lib/adminAuth.js';
 import {
   buildEventCounts,
   decorateProduct,
   getTrendingCutoffISO,
   rankProducts,
 } from './_lib/ranking.js';
-
-async function admin(req) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return false;
-  const { data } = await supabase.auth.getUser(token);
-  return !!data.user;
-}
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -274,8 +268,10 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const isAdmin = await admin(req);
-      if (req.query.admin === 'true' && !isAdmin) return res.status(401).json({ error: 'Unauthorized' });
+      const isAdmin = await isAdminRequest(req);
+      if (req.query.admin === 'true' && !isAdmin) {
+        return res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+      }
 
       const { data: categories, error: categoryError } = await supabase.from('categories').select('id,name');
       if (categoryError) throw categoryError;
@@ -335,7 +331,7 @@ export default async function handler(req, res) {
       return res.status(200).json(rankProducts(normalized, eventCounts, categories));
     }
 
-    if (!(await admin(req))) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await requireAdmin(req, res))) return;
 
     if (req.method === 'POST') {
       const { name } = req.body || {};

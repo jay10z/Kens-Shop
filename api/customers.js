@@ -1,4 +1,5 @@
 import supabase from './_lib/db-client.js';
+import { requireAdmin } from './_lib/adminAuth.js';
 import { decorateCustomers, matchesCustomerQuery, summarizeCustomers } from './_lib/customerStats.js';
 
 const cors = (res) => {
@@ -6,13 +7,6 @@ const cors = (res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
-
-async function isAdmin(req) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return false;
-  const { data } = await supabase.auth.getUser(token);
-  return !!data.user;
-}
 
 function publicCustomer(row) {
   if (!row) return null;
@@ -56,7 +50,7 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    if (!(await isAdmin(req))) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await requireAdmin(req, res))) return;
 
     const [customersResult, ordersResult] = await Promise.all([
       supabase.from('customers').select('*').order('created_at', { ascending: false }),
