@@ -10,6 +10,8 @@
 --   8) phase8_customers_orders_migration.sql  (customers + orders.customer_id + status)
 --   9) phase9_target_gender_migration.sql  (products.target_gender: men|women|unisex)
 --  10) phase10_rls_hardening_migration.sql  (RLS on all public tables + SELECT policies)
+--  11) phase11_order_stock_reservation_migration.sql  (atomic create_order_with_stock;
+--      production order_items persist product_name only — not color/model)
 
 CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

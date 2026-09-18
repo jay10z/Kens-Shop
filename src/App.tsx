@@ -868,6 +868,8 @@ function Cart(){
     if(code==='INVALID_EMAIL')return t('cart.emailInvalid');
     if(code==='CUSTOMER_CREATE_FAILED')return t('cart.customerSaveError');
     if(code==='EMPTY_CART'||code==='INVALID_CART')return t('cart.orderError');
+    if(code==='PRODUCT_NOT_FOUND'||code==='PRODUCT_INACTIVE'||code==='PRODUCT_HIDDEN')return t('cart.orderError');
+    if(code==='INSUFFICIENT_STOCK'||code==='INVALID_QUANTITY')return t('cart.orderError');
     if(/timed out|network|fetch/i.test(String(err?.message||'')))return t('cart.networkError');
     return t('cart.orderError');
   };
@@ -880,32 +882,29 @@ function Cart(){
     const customer={full_name:fullName.trim(),phone:phone.trim(),email:email.trim()};
     persistGuest(customer);
     try{
-      const snapshot=items.map((x:any)=>({
-        product_id:x.product.id,
-        product_name:x.product.name,
-        price:x.product.price,
-        quantity:x.quantity,
-        color:x.color,
-        model:x.model,
-        line:{
-          name:x.product.name,
+      // Price/total/product_name may still be sent; server ignores them for money/availability.
+      const payload={
+        items:items.map((x:any)=>({
+          product_id:x.product.id,
           quantity:x.quantity,
-          unitPrice:x.product.price,
           color:x.color,
           model:x.model,
-        },
-      }));
-      const payload={
-        items:snapshot.map(({line:_drop,...item})=>item),
+          product_name:x.product.name,
+          price:x.product.price,
+        })),
         total,
         customer,
       };
       const d=await api('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(!d?.order_number)throw new Error(t('cart.orderError'));
 
+      const serverItems=Array.isArray(d.items)?d.items:[];
+      const serverTotal=Number(d.total);
+      if(!serverItems.length||!Number.isFinite(serverTotal))throw new Error(t('cart.orderError'));
+
       trackPurchase({
-        value: Number(total) || 0,
-        items: snapshot.map((x)=>({
+        value: serverTotal,
+        items: serverItems.map((x:any)=>({
           id: x.product_id,
           name: x.product_name,
           price: Number(x.price),
@@ -915,8 +914,14 @@ function Cart(){
 
       const message=buildWhatsAppOrderMessage({
         orderNumber:d.order_number,
-        lines:snapshot.map((x)=>x.line),
-        total,
+        lines:serverItems.map((x:any)=>({
+          name:x.product_name,
+          quantity:Number(x.quantity)||1,
+          unitPrice:Number(x.price),
+          color:x.color||undefined,
+          model:x.model||undefined,
+        })),
+        total:serverTotal,
         storeName:BRAND.fullName,
         formatMoney:money,
         messageTemplate:(orderNumber,lines,orderTotal,storeName)=>

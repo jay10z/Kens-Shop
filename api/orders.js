@@ -62,17 +62,104 @@ function friendlyAdminError(_error, fallback = 'Something went wrong. Please try
   return { error: fallback, code: 'ORDERS_ERROR' };
 }
 
-/** Build order_items rows with historical product_name snapshot */
-function buildOrderItemRows(items, orderId) {
-  return (items || []).map((x) => ({
-    order_id: orderId,
-    product_id: x.product_id || null,
-    product_name: x.product_name ? String(x.product_name).trim() : null,
-    quantity: Number(x.quantity),
-    price: Number(x.price),
-    color: x.color ? String(x.color).trim() : null,
-    model: x.model ? String(x.model).trim() : null,
-  }));
+const ORDER_VALIDATION_CODES = new Set([
+  'PRODUCT_NOT_FOUND',
+  'PRODUCT_INACTIVE',
+  'PRODUCT_HIDDEN',
+  'INSUFFICIENT_STOCK',
+  'INVALID_QUANTITY',
+  'INVALID_CART',
+]);
+
+function extractOrderRpcCode(error) {
+  const msg = String(error?.message || error?.details || error?.hint || '');
+  for (const code of ORDER_VALIDATION_CODES) {
+    if (msg === code || msg.startsWith(`${code}:`) || msg.includes(code)) return code;
+  }
+  if (/Could not find the function|schema cache|create_order_with_stock/i.test(msg)) {
+    return 'SCHEMA_ORDER_RESERVATION';
+  }
+  return null;
+}
+
+function friendlyReservationError(error) {
+  const code = extractOrderRpcCode(error);
+  if (code === 'PRODUCT_NOT_FOUND') {
+    return { status: 400, body: { error: 'One or more products are no longer available. Please refresh your cart.', code } };
+  }
+  if (code === 'PRODUCT_INACTIVE' || code === 'PRODUCT_HIDDEN') {
+    return { status: 400, body: { error: 'One or more products are no longer available for sale. Please refresh your cart.', code } };
+  }
+  if (code === 'INSUFFICIENT_STOCK') {
+    return { status: 400, body: { error: 'Not enough stock for one or more items. Please refresh your cart.', code } };
+  }
+  if (code === 'INVALID_QUANTITY') {
+    return { status: 400, body: { error: 'Invalid quantity. Please refresh your cart and try again.', code } };
+  }
+  if (code === 'INVALID_CART') {
+    return { status: 400, body: { error: 'Your cart is invalid. Please refresh and try again.', code } };
+  }
+  if (code === 'SCHEMA_ORDER_RESERVATION') {
+    return {
+      status: 500,
+      body: {
+        error: 'We could not reserve your order. Please try again shortly.',
+        code,
+        migrationRequired: true,
+      },
+    };
+  }
+  return { status: 500, body: friendlyOrderError(error) };
+}
+
+/** Client money fields are ignored — only identity + qty + options are forwarded to the RPC. */
+function buildReservationItems(items) {
+  const out = [];
+  for (const item of items || []) {
+    if (!item?.product_id) {
+      return { ok: false, status: 400, body: { error: 'Your cart is invalid. Please refresh and try again.', code: 'INVALID_CART' } };
+    }
+    if (item.quantity == null || item.quantity === '') {
+      return { ok: false, status: 400, body: { error: 'Invalid quantity. Please refresh your cart and try again.', code: 'INVALID_QUANTITY' } };
+    }
+    // Reject non-numeric / decimal / non-integer before RPC (strings like "2" are accepted).
+    const raw = item.quantity;
+    if (typeof raw === 'object') {
+      return { ok: false, status: 400, body: { error: 'Invalid quantity. Please refresh your cart and try again.', code: 'INVALID_QUANTITY' } };
+    }
+    const asNum = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(asNum) || !Number.isInteger(asNum) || asNum <= 0) {
+      return { ok: false, status: 400, body: { error: 'Invalid quantity. Please refresh your cart and try again.', code: 'INVALID_QUANTITY' } };
+    }
+
+    const row = {
+      product_id: String(item.product_id),
+      quantity: asNum,
+    };
+    if (item.color != null && String(item.color).trim()) row.color = String(item.color).trim();
+    if (item.model != null && String(item.model).trim()) row.model = String(item.model).trim();
+    out.push(row);
+  }
+  if (!out.length) {
+    return { ok: false, status: 400, body: { error: 'Your cart is empty', code: 'EMPTY_CART' } };
+  }
+  return { ok: true, items: out };
+}
+
+function makeOrderNumber() {
+  return `KS-${new Date().toISOString().slice(2, 10).replaceAll('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+async function reserveOrderWithStock({ customer, items, orderNumber }) {
+  const { data, error } = await supabase.rpc('create_order_with_stock', {
+    p_customer_id: customer.id,
+    p_customer_name: customer.full_name,
+    p_whatsapp_number: customer.phone,
+    p_user_email: customer.email || null,
+    p_order_number: orderNumber,
+    p_items: items,
+  });
+  return { data, error };
 }
 
 function validateCustomerInput(raw) {
@@ -180,16 +267,14 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'POST') {
-      const { items, total, customer: customerRaw } = req.body || {};
+      // Client may still send price/total/product_name; they are ignored for money/availability.
+      const { items, customer: customerRaw } = req.body || {};
       if (!items?.length) {
         return res.status(400).json({ error: 'Your cart is empty', code: 'EMPTY_CART' });
       }
 
-      for (const item of items) {
-        if (!item?.product_id || !item?.quantity || item.price == null) {
-          return res.status(400).json({ error: 'Your cart is invalid. Please refresh and try again.', code: 'INVALID_CART' });
-        }
-      }
+      const normalized = buildReservationItems(items);
+      if (!normalized.ok) return res.status(normalized.status).json(normalized.body);
 
       const validated = validateCustomerInput(customerRaw);
       if (!validated.ok) return res.status(validated.status).json(validated.body);
@@ -206,78 +291,40 @@ export default async function handler(req, res) {
         });
       }
 
-      const order_number = `KS-${new Date().toISOString().slice(2, 10).replaceAll('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      let orderNumber = makeOrderNumber();
+      let { data: reserved, error: reserveError } = await reserveOrderWithStock({
+        customer,
+        items: normalized.items,
+        orderNumber,
+      });
 
-      const orderPayload = {
-        order_number,
-        total: Number(total) || 0,
-        status: 'Pending',
-        customer_id: customer.id,
-        customer_name: customer.full_name,
-        whatsapp_number: customer.phone,
-        user_email: customer.email || null,
-      };
-
-      let { data: order, error } = await supabase.from('orders').insert(orderPayload).select().single();
-      if (error) {
-        const missing = missingColumnFromError(error);
-        if (missing === 'customer_id' || missing === 'customer_name' || missing === 'whatsapp_number') {
-          console.error('[orders] missing order column — run phase8_customers_orders_migration.sql:', missing);
-          return res.status(500).json(friendlyOrderError(error));
-        }
-        console.error('[orders] create order:', error.message || error);
-        return res.status(500).json(friendlyOrderError(error));
-      }
-
-      // 2. Insert order items (snapshot product_name for history)
-      let rows = buildOrderItemRows(items, order.id);
-
-      const missingNames = rows.filter((r) => !r.product_name && r.product_id).map((r) => r.product_id);
-      if (missingNames.length) {
-        const { data: named } = await supabase.from('products').select('id,name').in('id', missingNames);
-        const byId = new Map((named || []).map((p) => [p.id, p.name]));
-        rows = rows.map((r) => ({
-          ...r,
-          product_name: r.product_name || byId.get(r.product_id) || null,
+      // Rare order_number collision — retry once with a new number.
+      if (reserveError && isUniqueViolation(reserveError)) {
+        orderNumber = makeOrderNumber();
+        ({ data: reserved, error: reserveError } = await reserveOrderWithStock({
+          customer,
+          items: normalized.items,
+          orderNumber,
         }));
       }
 
-      let { error: itemError } = await supabase.from('order_items').insert(rows);
-      if (itemError && missingColumnFromError(itemError) === 'product_name') {
-        console.error('[orders] order_items.product_name missing — run phase7_order_items_product_name_migration.sql');
-        await supabase.from('orders').delete().eq('id', order.id);
-        return res.status(500).json(friendlyOrderError(itemError));
-      }
-      if (itemError) {
-        const missing = missingColumnFromError(itemError);
-        if (missing === 'color' || missing === 'model') {
-          console.warn(`[orders] omitting missing column on insert: ${missing}`);
-          rows = rows.map(({ [missing]: _drop, ...rest }) => rest);
-          ({ error: itemError } = await supabase.from('order_items').insert(rows));
-          if (itemError && (missingColumnFromError(itemError) === 'color' || missingColumnFromError(itemError) === 'model')) {
-            const missing2 = missingColumnFromError(itemError);
-            rows = rows.map(({ [missing2]: _drop, ...rest }) => rest);
-            ({ error: itemError } = await supabase.from('order_items').insert(rows));
-          }
-        }
-      }
-      if (itemError) {
-        console.error('[orders] create items:', itemError.message || itemError);
-        await supabase.from('orders').delete().eq('id', order.id);
-        return res.status(500).json({
-          error: 'We could not reserve your order. Please try again.',
-          code: 'ORDER_ITEMS_FAILED',
-        });
+      if (reserveError || !reserved?.order_number) {
+        console.error('[orders] reserve:', reserveError?.message || reserveError || 'empty reservation');
+        const mapped = friendlyReservationError(reserveError || { message: 'ORDER_CREATE_FAILED' });
+        return res.status(mapped.status).json(mapped.body);
       }
 
+      const orderItems = Array.isArray(reserved.items) ? reserved.items : [];
+
+      // Best-effort analytics AFTER successful reservation (not part of the stock transaction).
       try {
-        const events = items.map((x) => ({
+        const events = orderItems.map((x) => ({
           product_id: x.product_id,
           event_type: 'purchase',
         }));
-        await supabase.from('product_events').insert(events);
+        if (events.length) await supabase.from('product_events').insert(events);
 
-        for (const item of items) {
+        for (const item of orderItems) {
           const { data: p } = await supabase
             .from('products')
             .select('purchase_count')
@@ -295,7 +342,17 @@ export default async function handler(req, res) {
       }
 
       return res.status(201).json({
-        ...order,
+        id: reserved.id,
+        order_number: reserved.order_number,
+        total: reserved.total,
+        status: reserved.status || 'Pending',
+        customer_id: reserved.customer_id || customer.id,
+        customer_name: reserved.customer_name || customer.full_name,
+        whatsapp_number: reserved.whatsapp_number || customer.phone,
+        user_email: reserved.user_email ?? customer.email ?? null,
+        created_at: reserved.created_at,
+        updated_at: reserved.updated_at,
+        items: orderItems,
         customer: {
           id: customer.id,
           full_name: customer.full_name,
