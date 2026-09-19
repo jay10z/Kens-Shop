@@ -36,6 +36,14 @@ import {
   trackPurchase,
   trackViewItem,
 } from './lib/analytics';
+import {
+  clearAllProductDrafts,
+  clearProductDraft,
+  productDraftKey,
+  readProductDraft,
+  serializableDraftImages,
+  writeProductDraft,
+} from './lib/productDraft';
 import { I18nProvider, useI18n } from './i18n/Context';
 import { useCart, type Product } from './contexts/CartContext';
 import { useAuth } from './contexts/AuthContext';
@@ -1009,25 +1017,76 @@ function useAdminNoIndex(){useEffect(()=>{const meta=document.createElement('met
 function Protected({children}:{children:React.ReactNode}){
   const {user,session,loading}=useAuth();
   const [adminState,setAdminState]=useState<'loading'|'yes'|'no'>('loading');
+  const adminStateRef=useRef(adminState);
+  const verifiedUserIdRef=useRef<string|null>(null);
+  adminStateRef.current=adminState;
+
   useEffect(()=>{
     if(loading)return;
-    if(!user||!session?.access_token){setAdminState('no');return;}
+    if(!user||!session?.access_token){
+      verifiedUserIdRef.current=null;
+      setAdminState('no');
+      return;
+    }
+
     let cancelled=false;
-    setAdminState('loading');
-    api('/api/admin-me',{headers:{Authorization:`Bearer ${session.access_token}`}})
-      .then((d)=>{
+    const token=session.access_token;
+    const userId=user.id;
+    // Keep admin UI mounted across normal JWT refresh for the same user.
+    // Only show the full-page loader on the initial gate (or after a user switch).
+    const sameUserAlreadyAdmin=
+      adminStateRef.current==='yes'&&verifiedUserIdRef.current===userId;
+    if(!sameUserAlreadyAdmin){
+      setAdminState('loading');
+    }
+
+    const rejectAuth=()=>{
+      verifiedUserIdRef.current=null;
+      setAdminState('no');
+      clearAllProductDrafts();
+      supabase?.auth.signOut().catch(()=>{/* ignore */});
+    };
+
+    const isDefinitiveAuthFailure=(err:any)=>{
+      const code=String(err?.code||'');
+      const msg=String(err?.message||err||'');
+      return code==='UNAUTHORIZED'||code==='FORBIDDEN'||/unauthorized|forbidden|not an admin/i.test(msg);
+    };
+
+    const verify=async(attempt=0):Promise<void>=>{
+      try{
+        const d=await api('/api/admin-me',{headers:{Authorization:`Bearer ${token}`}});
         if(cancelled)return;
-        if(d?.admin){setAdminState('yes');return;}
-        setAdminState('no');
-        supabase?.auth.signOut().catch(()=>{/* ignore */});
-      })
-      .catch(()=>{
+        if(d?.admin){
+          verifiedUserIdRef.current=userId;
+          setAdminState('yes');
+          return;
+        }
+        // Explicit non-admin response — revoke access.
+        rejectAuth();
+      }catch(err:any){
         if(cancelled)return;
+        if(isDefinitiveAuthFailure(err)){
+          rejectAuth();
+          return;
+        }
+        // Transient network/timeout: retry, then keep UI if already verified.
+        if(attempt<2){
+          await new Promise((r)=>setTimeout(r,400*(attempt+1)));
+          if(cancelled)return;
+          return verify(attempt+1);
+        }
+        if(sameUserAlreadyAdmin||adminStateRef.current==='yes'){
+          return;
+        }
         setAdminState('no');
-        supabase?.auth.signOut().catch(()=>{/* ignore */});
-      });
+      }
+    };
+
+    verify();
     return()=>{cancelled=true};
   },[loading,user,session?.access_token]);
+
   if(loading||(user&&adminState==='loading'))return <Loading/>;
   if(!user||adminState!=='yes')return <Navigate to="/admin/login" replace/>;
   return children;
@@ -1057,12 +1116,14 @@ function Login(){
         if(d?.admin){setIsAdmin(true);return;}
         setIsAdmin(false);
         setError(t('admin.invalidLogin'));
+        clearAllProductDrafts();
         supabase?.auth.signOut().catch(()=>{/* ignore */});
       })
       .catch(()=>{
         if(cancelled)return;
         setIsAdmin(false);
         setError(t('admin.invalidLogin'));
+        clearAllProductDrafts();
         supabase?.auth.signOut().catch(()=>{/* ignore */});
       })
       .finally(()=>{if(!cancelled)setCheckingAdmin(false)});
@@ -1086,6 +1147,7 @@ function Login(){
     try{
       const me=await api('/api/admin-me',{headers:{Authorization:`Bearer ${data.session.access_token}`}});
       if(!me?.admin){
+        clearAllProductDrafts();
         await supabase.auth.signOut();
         setError(t('admin.invalidLogin'));
         setBusy(false);
@@ -1093,6 +1155,7 @@ function Login(){
       }
       setIsAdmin(true);
     }catch{
+      clearAllProductDrafts();
       await supabase.auth.signOut();
       setError(t('admin.invalidLogin'));
     }
@@ -1106,7 +1169,7 @@ function AdminShell({children}:{children:React.ReactNode}){
   const {theme, toggle}=useThemeMode();
   const ThemeIcon = theme === 'light' ? Sun : Moon;
   const themeLabel = theme === 'light' ? t('header.themeDark') : t('header.themeLight');
-  const logout=async()=>{await supabase?.auth.signOut();nav('/admin/login')};
+  const logout=async()=>{clearAllProductDrafts();await supabase?.auth.signOut();nav('/admin/login')};
   return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button type="button" className="close-admin" onClick={()=>setOpen(false)} aria-label={t('common.close')}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink><NavLink to="/admin/customers"><Users/> {t('admin.navCustomers')}</NavLink></nav><button type="button" onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button type="button" onClick={()=>setOpen(true)} aria-label={t('header.menu')}><Menu/></button><div className="head-actions admin-head-actions"><button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button><button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button><span>{t('admin.shopManager')}</span><CircleUser aria-hidden="true"/></div></header>{children}</div></div>
 }
 function AdminDashboard(){
@@ -1352,12 +1415,13 @@ function Stock({n,threshold=5,priority}:{n:number;threshold?:number;priority?:nu
 }
 function ProductModal({item,cats,token,close,done,error,setError}:any){
   const {t}=useI18n();
+  const draftKey=productDraftKey(item?.id);
   const toCsv=(v:unknown)=>{
     if(Array.isArray(v))return v.map(x=>String(x).trim()).filter(Boolean).join(', ');
     if(typeof v==='string')return v;
     return '';
   };
-  const [form,setForm]=useState({
+  const buildFormFromItem=()=>({
     name:item.name||'',
     short_description:item.short_description||'',
     description:item.description||'',
@@ -1373,7 +1437,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     active:item.active??true,
     display_priority:item.display_priority??'',
   });
-  const [images,setImages]=useState<ProductImageDraft[]>(()=>(
+  const buildImagesFromItem=():ProductImageDraft[]=>(
     Array.isArray(item.images)
       ? item.images.filter(Boolean).map((url:string,i:number)=>({
           id:`existing-${i}-${url}`,
@@ -1382,7 +1446,23 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
           status:'uploaded' as const,
         }))
       : []
-  ));
+  );
+  const [form,setForm]=useState(()=>{
+    const draft=readProductDraft(draftKey);
+    return draft?.form?{...buildFormFromItem(),...draft.form,target_gender:(normalizeTargetGender(draft.form.target_gender)||draft.form.target_gender||'') as TargetGender|''}:buildFormFromItem();
+  });
+  const [images,setImages]=useState<ProductImageDraft[]>(()=>{
+    const draft=readProductDraft(draftKey);
+    if(draft?.images?.length){
+      return draft.images.map((im)=>({
+        id:im.id,
+        preview:im.url,
+        url:im.url,
+        status:'uploaded' as const,
+      }));
+    }
+    return buildImagesFromItem();
+  });
   const [saving,setSaving]=useState(false);
   const [showAdvanced,setShowAdvanced]=useState(false);
   const uploading=images.some(im=>im.status==='preparing'||im.status==='uploading');
@@ -1391,6 +1471,16 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
   const busy=saving||uploading;
   const set=(k:string,v:any)=>setForm(x=>({...x,[k]:v}));
   const parseList=(raw:string)=>String(raw||'').split(',').map((x:string)=>x.trim()).filter(Boolean);
+
+  // Persist draft while editing — survives remounts; cleared on save or intentional dismiss.
+  useEffect(()=>{
+    writeProductDraft(draftKey,form as any,serializableDraftImages(images));
+  },[draftKey,form,images]);
+
+  const dismiss=()=>{
+    clearProductDraft(draftKey);
+    close();
+  };
 
   useEffect(()=>()=>{
     images.forEach(im=>{
@@ -1539,6 +1629,7 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
         hidden:!!form.hidden,
         active:!!form.active,
       })});
+      clearProductDraft(draftKey);
       done();
     }catch(e:any){
       console.error('[product save]',e);
@@ -1553,14 +1644,14 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
     return t('admin.uploadStateFailed');
   };
 
-  return <div className="modal-bg" role="presentation" onClick={(e)=>{if(e.target===e.currentTarget&&!busy)close()}}>
+  return <div className="modal-bg" role="presentation" onClick={(e)=>{if(e.target===e.currentTarget&&!busy)dismiss()}}>
     <form className="modal product-modal" onSubmit={save} aria-busy={busy} noValidate>
       <div className="modal-head">
         <div>
           <p className="eyebrow gold">{item.id?t('admin.modal.editProduct'):t('admin.modal.newProduct')}</p>
           <h2>{item.id?t('admin.modal.productDetails'):t('admin.modal.addTitle')}</h2>
         </div>
-        <button type="button" onClick={close} aria-label={t('common.close')} disabled={busy}><X/></button>
+        <button type="button" onClick={dismiss} aria-label={t('common.close')} disabled={busy}><X/></button>
       </div>
 
       <div className="form-sections">
@@ -1698,8 +1789,8 @@ function ProductModal({item,cats,token,close,done,error,setError}:any){
 
       {error&&<p className="error" role="alert">{error}</p>}
       <div className="modal-actions">
-        <button type="button" onClick={close} disabled={busy}>{t('admin.modal.cancel')}</button>
-        <button className="btn gold-btn" disabled={busy||hasFailed} aria-busy={busy}>
+        <button type="button" onClick={dismiss} disabled={busy}>{t('admin.modal.cancel')}</button>
+        <button type="submit" className="btn gold-btn" disabled={busy||hasFailed} aria-busy={busy}>
           {busy?<Loader2 className="spin"/>:<Check/>}
           {uploading?t('admin.modal.saveBlockedUploading'):saving?t('admin.modal.saving'):t('admin.modal.save')}
         </button>
