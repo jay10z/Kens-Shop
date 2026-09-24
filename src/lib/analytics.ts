@@ -8,6 +8,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
+import { analyticsReferrer, shouldTrackPagePath } from './pageTracking.js';
 
 export const GA_CURRENCY = 'XAF';
 
@@ -64,20 +65,18 @@ export function initAnalytics() {
   document.head.appendChild(script);
 }
 
-function isAdminPath(path: string) {
-  return path === '/admin' || path.startsWith('/admin/');
-}
-
 /** SPA page view — call on route changes only (not on config). */
 export function trackPageView(path: string, title?: string) {
   const id = measurementId();
   if (!id || !initialized) return;
-  if (isAdminPath(path)) return;
+  if (!shouldTrackPagePath(path)) return;
 
+  const pageReferrer = analyticsReferrer(document.referrer);
   gtag('event', 'page_view', {
     page_path: path,
     page_title: title || document.title,
     page_location: `${window.location.origin}${path}`,
+    ...(pageReferrer ? { page_referrer: pageReferrer } : {}),
     send_to: id,
   });
 }

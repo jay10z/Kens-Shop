@@ -8,6 +8,7 @@
  * on this machine. It never opens an existing database and never
  * reads Supabase or other remote credentials.
  */
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { spawn, execFileSync } from 'node:child_process';
@@ -19,6 +20,8 @@ import pg from 'pg';
 import { evaluateStatusUpdate } from '../api/_lib/orderStatus.js';
 import { isAdminUser } from '../api/_lib/adminAuth.js';
 import handler from '../api/orders.js';
+import reviewsHandler from '../api/reviews.js';
+import { analyticsReferrer, shouldTrackPagePath } from '../src/lib/pageTracking.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONTAINER = 'ks-order-lifecycle-pg';
@@ -47,6 +50,12 @@ function mockRes() {
 async function apiCall(body) {
   const res = mockRes();
   await handler({ method: 'PUT', headers: {}, body }, res);
+  return res;
+}
+
+async function reviewCall(method, body, headers = {}) {
+  const res = mockRes();
+  await reviewsHandler({ method, headers, body, query: {} }, res);
   return res;
 }
 
@@ -221,6 +230,271 @@ async function purchaseEvents(client, productId) {
   return rows[0].n;
 }
 
+async function effectSnapshot(client, productId, orderId) {
+  const stock = await stockOf(client, productId);
+  const events = (await client.query('SELECT COUNT(*)::int AS n FROM product_events WHERE product_id = $1', [productId])).rows[0].n;
+  const order = (await client.query(
+    'SELECT status, total::float AS total, stock_policy FROM orders WHERE id = $1',
+    [orderId]
+  )).rows[0];
+  const items = (await client.query(
+    'SELECT product_id, quantity, price::float AS price, product_name FROM order_items WHERE order_id = $1 ORDER BY product_id, quantity',
+    [orderId]
+  )).rows;
+  return { stock, events, order, items };
+}
+
+async function reviewCount(client, orderId) {
+  const { rows } = await client.query('SELECT COUNT(*)::int AS n FROM order_reviews WHERE order_id = $1', [orderId]);
+  return rows[0].n;
+}
+
+async function runReviewChecks(client, { customerId, legacyOrderId, legacyProductId }) {
+  const already = (await client.query(
+    `INSERT INTO orders (order_number, total, status, customer_id, customer_name, stock_policy)
+     VALUES ('KS-ALREADY-DELIVERED', 5000, 'Delivered', $1, 'Historical', NULL)
+     RETURNING id`,
+    [customerId]
+  )).rows[0];
+
+  await applySql(client, 'phase13_order_reviews.sql');
+
+  const backfill = await reviewCount(client, already.id);
+  const insertedDelivered = (await client.query(
+    `INSERT INTO orders (order_number, total, status, customer_id, customer_name, stock_policy)
+     VALUES ('KS-INSERT-DELIVERED', 5000, 'Delivered', $1, 'Historical', NULL)
+     RETURNING id`,
+    [customerId]
+  )).rows[0];
+  check(
+    'R-no-backfill',
+    backfill === 0 && await reviewCount(client, insertedDelivered.id) === 0,
+    `existing ${backfill}`
+  );
+
+  const product = (await client.query(
+    `INSERT INTO products (name, slug, price, stock_quantity, active, hidden)
+     VALUES ('Review Bottle', 'review-bottle', 12000, 6, true, false)
+     RETURNING id`
+  )).rows[0];
+
+  const pending = (await client.query(
+    `SELECT create_pending_order($1,$2,$3,$4,$5::jsonb,NULL) AS result`,
+    [customerId, 'Historical', '+237600000001', 'KS-REVIEW-NEW', JSON.stringify([{ product_id: product.id, quantity: 1 }])]
+  )).rows[0].result;
+  check('R-create-still-works', pending.status === 'Pending' && await reviewCount(client, pending.id) === 0);
+
+  const confirmed = (await client.query('SELECT confirm_pending_order($1) AS result', [pending.id])).rows[0].result;
+  const afterConfirm = await stockOf(client, product.id);
+  check(
+    'R-confirm-no-invitation',
+    confirmed.status === 'Confirmed'
+      && await reviewCount(client, pending.id) === 0
+      && afterConfirm.stock_quantity === 5
+      && afterConfirm.purchase_count === 1
+      && await purchaseEvents(client, product.id) === 1
+  );
+
+  const blockedOrder = (await client.query(
+    `SELECT create_pending_order($1,$2,$3,$4,$5::jsonb,NULL) AS result`,
+    [customerId, 'Historical', '+237600000001', 'KS-REVIEW-BLOCK', JSON.stringify([{ product_id: product.id, quantity: 1 }])]
+  )).rows[0].result;
+  const blocked = await expectError(() => client.query('SELECT mark_order_delivered($1)', [blockedOrder.id]));
+  const blockedStatus = (await client.query('SELECT status FROM orders WHERE id = $1', [blockedOrder.id])).rows[0];
+  check(
+    'R-pending-delivered-blocked',
+    codeOf(blocked).includes('CONFIRM_REQUIRED')
+      && blockedStatus.status === 'Pending'
+      && await reviewCount(client, blockedOrder.id) === 0
+      && (await stockOf(client, product.id)).stock_quantity === 5,
+    codeOf(blocked)
+  );
+
+  await client.query(`UPDATE orders SET status = 'Processing', updated_at = timezone('utc', now()) WHERE id = $1`, [pending.id]);
+  check('R-processing-no-invitation', await reviewCount(client, pending.id) === 0);
+  const beforeDeliver = await effectSnapshot(client, product.id, pending.id);
+  const delivered = (await client.query('SELECT mark_order_delivered($1) AS result', [pending.id])).rows[0].result;
+  const token = delivered.review_token;
+  const invitation = (await client.query(
+    'SELECT id, status, rating, comment, display_name, token_hash, submitted_at FROM order_reviews WHERE order_id = $1',
+    [pending.id]
+  )).rows[0];
+  const hashed = createHash('sha256').update(token, 'utf8').digest('hex');
+  const storedBlob = JSON.stringify(invitation);
+  check(
+    'R-delivered-one-invitation',
+    delivered.order.status === 'Delivered'
+      && typeof token === 'string'
+      && token.length === 43
+      && !/[^A-Za-z0-9_-]/.test(token)
+      && invitation.status === 'invited'
+      && invitation.rating === null
+      && invitation.token_hash === hashed
+      && invitation.token_hash !== token
+      && !storedBlob.includes(token)
+      && await reviewCount(client, pending.id) === 1
+      && (await stockOf(client, product.id)).stock_quantity === beforeDeliver.stock.stock_quantity
+      && await purchaseEvents(client, product.id) === beforeDeliver.events,
+    `len ${token ? token.length : 0}`
+  );
+
+  const again = (await client.query('SELECT mark_order_delivered($1) AS result', [pending.id])).rows[0].result;
+  check(
+    'R-second-delivered-no-second-review',
+    again.review_token == null && await reviewCount(client, pending.id) === 1
+  );
+
+  const legacyBefore = await stockOf(client, legacyProductId);
+  const legacyDelivered = (await client.query('SELECT mark_order_delivered($1) AS result', [legacyOrderId])).rows[0].result;
+  const legacyAfter = await stockOf(client, legacyProductId);
+  check(
+    'R-legacy-transition-gets-invitation',
+    typeof legacyDelivered.review_token === 'string'
+      && legacyDelivered.review_token.length === 43
+      && await reviewCount(client, legacyOrderId) === 1
+      && legacyBefore.stock_quantity === legacyAfter.stock_quantity
+      && legacyBefore.purchase_count === legacyAfter.purchase_count,
+    `len ${legacyDelivered.review_token ? legacyDelivered.review_token.length : 0}`
+  );
+
+  const beforeSubmit = await effectSnapshot(client, product.id, pending.id);
+  const submitted = (await client.query(
+    'SELECT submit_order_review($1, $2, $3, $4) AS result',
+    [token, 5, '  Beautiful bottle.  ', '  Ada  ']
+  )).rows[0].result;
+  const afterSubmit = await effectSnapshot(client, product.id, pending.id);
+  const submittedRow = (await client.query(
+    'SELECT status, rating, comment, display_name, submitted_at IS NOT NULL AS has_submitted FROM order_reviews WHERE order_id = $1',
+    [pending.id]
+  )).rows[0];
+  check(
+    'R-submit-valid',
+    submitted.ok === true
+      && submittedRow.status === 'pending'
+      && submittedRow.rating === 5
+      && submittedRow.comment === 'Beautiful bottle.'
+      && submittedRow.display_name === 'Ada'
+      && submittedRow.has_submitted === true
+      && JSON.stringify(beforeSubmit) === JSON.stringify(afterSubmit)
+  );
+
+  const second = (await client.query(
+    'SELECT submit_order_review($1, 4, $2, NULL) AS result',
+    [token, 'again']
+  )).rows[0].result;
+  const invalid = (await client.query(
+    'SELECT submit_order_review($1, 4, $2, NULL) AS result',
+    ['a'.repeat(43), 'nope']
+  )).rows[0].result;
+  const stillOne = await reviewCount(client, pending.id);
+  const stillPending = (await client.query('SELECT status, rating FROM order_reviews WHERE order_id = $1', [pending.id])).rows[0];
+  check(
+    'R-no-double-submit-same-as-invalid',
+    second.ok === false
+      && invalid.ok === false
+      && second.code === 'REVIEW_UNAVAILABLE'
+      && invalid.code === 'REVIEW_UNAVAILABLE'
+      && stillOne === 1
+      && stillPending.status === 'pending'
+      && stillPending.rating === 5
+  );
+
+  const tooLong = (await client.query(
+    'SELECT submit_order_review($1, 5, $2, NULL) AS result',
+    [legacyDelivered.review_token, 'x'.repeat(1001)]
+  )).rows[0].result;
+  const legacyStillInvited = (await client.query('SELECT status, rating FROM order_reviews WHERE order_id = $1', [legacyOrderId])).rows[0];
+  check(
+    'R-comment-limit',
+    tooLong.ok === false && tooLong.code === 'INVALID_REVIEW' && legacyStillInvited.status === 'invited' && legacyStillInvited.rating === null
+  );
+
+  const publicBefore = (await client.query('SELECT * FROM list_approved_reviews()')).rows;
+  check('R-pending-not-public', !JSON.stringify(publicBefore).includes('Beautiful bottle.'));
+
+  const approved = (await client.query('SELECT moderate_order_review($1, $2) AS result', [invitation.id, 'approve'])).rows[0].result;
+  const publicApproved = (await client.query('SELECT * FROM list_approved_reviews()')).rows;
+  const approvedJson = JSON.stringify(publicApproved);
+  const approvedKeys = publicApproved[0] ? Object.keys(publicApproved[0]) : [];
+  check(
+    'R-approved-public-safe',
+    approved.ok === true
+      && publicApproved.length === 1
+      && publicApproved[0].rating === 5
+      && publicApproved[0].comment === 'Beautiful bottle.'
+      && publicApproved[0].display_name === 'Ada'
+      && !approvedJson.includes(token)
+      && !approvedJson.includes(pending.id)
+      && !approvedKeys.some((key) => /token|order|phone|email|customer/i.test(key)),
+    approvedKeys.join(',')
+  );
+
+  const removed = (await client.query('SELECT moderate_order_review($1, $2) AS result', [invitation.id, 'remove'])).rows[0].result;
+  const publicAfter = (await client.query('SELECT COUNT(*)::int AS n FROM list_approved_reviews()')).rows[0].n;
+  const kept = (await client.query('SELECT status FROM order_reviews WHERE id = $1', [invitation.id])).rows[0];
+  check(
+    'R-removed-not-public-row-kept',
+    removed.ok === true && removed.status === 'rejected' && publicAfter === 0 && kept.status === 'rejected'
+  );
+
+  const fresh = (await client.query(
+    `SELECT create_pending_order($1,$2,$3,$4,$5::jsonb,NULL) AS result`,
+    [customerId, 'Historical', '+237600000001', 'KS-REVIEW-ROTATE', JSON.stringify([{ product_id: product.id, quantity: 1 }])]
+  )).rows[0].result;
+  await client.query('SELECT confirm_pending_order($1)', [fresh.id]);
+  await client.query(`UPDATE orders SET status = 'Processing' WHERE id = $1`, [fresh.id]);
+  const firstLink = (await client.query('SELECT mark_order_delivered($1) AS result', [fresh.id])).rows[0].result.review_token;
+  const rotated = (await client.query('SELECT regenerate_order_review_token($1) AS token', [fresh.id])).rows[0].token;
+  const oldWorks = (await client.query('SELECT review_invitation_available($1) AS ok', [firstLink])).rows[0].ok;
+  const newWorks = (await client.query('SELECT review_invitation_available($1) AS ok', [rotated])).rows[0].ok;
+  check(
+    'R-regenerate-invalidates-old-token',
+    firstLink !== rotated
+      && oldWorks === false
+      && newWorks === true
+      && await reviewCount(client, fresh.id) === 1,
+    `same ${firstLink === rotated} oldWorks ${oldWorks} newWorks ${newWorks} lens ${String(firstLink || '').length}/${String(rotated || '').length} count ${await reviewCount(client, fresh.id)}`
+  );
+
+  let anonDenied = false;
+  await client.query('BEGIN');
+  try {
+    await client.query('SET LOCAL ROLE anon');
+    await client.query('SELECT id FROM order_reviews');
+  } catch (error) {
+    anonDenied = /permission denied/i.test(error.message);
+  }
+  await client.query('ROLLBACK');
+
+  const privileges = (await client.query(`
+    SELECT
+      has_function_privilege('anon', 'public.submit_order_review(text,integer,text,text)', 'execute') AS anon_submit,
+      has_function_privilege('anon', 'public.moderate_order_review(uuid,text)', 'execute') AS anon_moderate,
+      has_function_privilege('authenticated', 'public.list_approved_reviews()', 'execute') AS auth_list,
+      has_function_privilege('service_role', 'public.submit_order_review(text,integer,text,text)', 'execute') AS service_submit,
+      has_function_privilege('service_role', 'public.mark_order_delivered(uuid)', 'execute') AS service_deliver
+  `)).rows[0];
+  const rls = (await client.query(`
+    SELECT c.relrowsecurity, c.relforcerowsecurity,
+      (SELECT COUNT(*)::int FROM pg_policies p WHERE p.tablename = 'order_reviews') AS policies
+    FROM pg_class c
+    WHERE c.relname = 'order_reviews'
+  `)).rows[0];
+  check(
+    'R-admin-only-and-no-public-select',
+    anonDenied
+      && privileges.anon_submit === false
+      && privileges.anon_moderate === false
+      && privileges.auth_list === false
+      && privileges.service_submit === true
+      && privileges.service_deliver === true
+      && rls.relrowsecurity === true
+      && rls.relforcerowsecurity === true
+      && rls.policies === 0,
+    JSON.stringify({ privileges, rls, anonDenied })
+  );
+}
+
 async function main() {
   process.env.ADMIN_EMAILS = 'owner@kens-shop.test';
   const stranger = isAdminUser({ email: 'stranger@example.com', app_metadata: {} });
@@ -280,6 +554,43 @@ async function main() {
       && confirmSql.includes("'purchase'")
       && confirmSql.includes('purchase_count'),
     'checkout keeps begin_checkout; browser purchase is absent; confirm RPC owns purchase analytics'
+  );
+
+  const secret = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDE';
+  const reviewRef = `https://kens-shop.com/review/${secret}`;
+  const safeRef = analyticsReferrer(reviewRef);
+  const contentSrc = readFileSync(path.join(root, 'api/content.js'), 'utf8');
+  const whatsappSrc = readFileSync(path.join(root, 'src/lib/whatsappOrder.ts'), 'utf8');
+  const reviewSql = readFileSync(path.join(root, 'phase13_order_reviews.sql'), 'utf8');
+  const triggerSql = reviewSql.slice(
+    reviewSql.indexOf('FUNCTION public.orders_create_review_invitation'),
+    reviewSql.indexOf('DROP TRIGGER IF EXISTS orders_review_invitation_after_delivered')
+  );
+  check(
+    'R-analytics-skips-review-token',
+    shouldTrackPagePath('/shop') === true
+      && shouldTrackPagePath('/admin/orders') === false
+      && shouldTrackPagePath(`/review/${secret}`) === false
+      && shouldTrackPagePath(`/review/${secret}?x=1`) === false
+      && !String(safeRef).includes(secret)
+      && safeRef === 'https://kens-shop.com/',
+    safeRef
+  );
+  check('R-content-has-no-order-reviews', !contentSrc.includes('order_reviews') && !contentSrc.includes('/api/reviews'));
+  check('R-checkout-whatsapp-unchanged', !whatsappSrc.includes('/review/'));
+  check(
+    'R-trigger-does-not-touch-stock',
+    !/purchase_count|product_events|stock_quantity|UPDATE\s+public\.orders/i.test(triggerSql)
+  );
+  const badToken = await reviewCall('POST', { token: 'not-a-token', rating: 5 });
+  const unauthModerate = await reviewCall('PUT', { id: '00000000-0000-0000-0000-000000000099', action: 'approve' });
+  const unauthRegenerate = await reviewCall('POST', { action: 'regenerate', order_id: '00000000-0000-0000-0000-000000000099' });
+  check(
+    'R-invalid-token-and-admin-gate',
+    badToken.statusCode === 404 && badToken.body?.code === 'REVIEW_UNAVAILABLE'
+      && unauthModerate.statusCode === 401
+      && unauthRegenerate.statusCode === 401,
+    `token ${badToken.statusCode}, moderate ${unauthModerate.statusCode}, regenerate ${unauthRegenerate.statusCode}`
   );
 
   const port = await reserveLocalPort();
@@ -549,6 +860,12 @@ async function main() {
         && rlsOk,
       JSON.stringify(privileges)
     );
+
+    await runReviewChecks(client, {
+      customerId: customer.id,
+      legacyOrderId: legacyOrder.id,
+      legacyProductId: legacyProduct.id,
+    });
 
     await pool.end();
   } finally {

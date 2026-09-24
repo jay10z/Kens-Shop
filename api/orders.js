@@ -198,6 +198,34 @@ function makeOrderNumber() {
   return `KS-${new Date().toISOString().slice(2, 10).replaceAll('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
+function isMissingRpc(error, name) {
+  const msg = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`;
+  return new RegExp(name, 'i').test(msg) && /schema cache|Could not find the function|does not exist/i.test(msg);
+}
+
+/**
+ * Status-only delivery write. The database trigger creates the review
+ * invitation. The raw token is returned once and must not be logged.
+ */
+async function markDeliveredOrder(id) {
+  const { data, error } = await supabase.rpc('mark_order_delivered', { p_order_id: id });
+  if (error) {
+    if (isMissingRpc(error, 'mark_order_delivered')) {
+      const fallback = await supabase
+        .from('orders')
+        .update({ status: 'Delivered', updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single();
+      return { data: fallback.data, reviewToken: null, error: fallback.error };
+    }
+    return { data: null, reviewToken: null, error };
+  }
+  const order = data && typeof data === 'object' && data.order ? data.order : data;
+  const reviewToken = typeof data?.review_token === 'string' && data.review_token ? data.review_token : null;
+  return { data: order, reviewToken, error: null };
+}
+
 async function createPendingOrder({ customer, items, orderNumber }) {
   const { data, error } = await supabase.rpc('create_pending_order', {
     p_customer_id: customer.id,
@@ -479,6 +507,28 @@ export default async function handler(req, res) {
         return res.status(decision.http).json({ error: decision.error, code: decision.code });
       }
       if (decision.noop) return res.status(200).json(existing);
+
+      if (decision.next === 'Delivered') {
+        const delivered = await markDeliveredOrder(id);
+        if (delivered.error) {
+          const message = delivered.error.message || '';
+          if (message.includes('CONFIRM_REQUIRED')) {
+            return res.status(409).json({
+              error: 'Confirm this order before changing its status. You can still cancel it.',
+              code: 'CONFIRM_REQUIRED',
+            });
+          }
+          if (message.includes('ORDER_NOT_FOUND')) {
+            return res.status(404).json({ error: 'Order not found.', code: 'ORDER_NOT_FOUND' });
+          }
+          console.error('[orders] deliver:', delivered.error.code || 'STATUS_UPDATE_FAILED');
+          return res.status(500).json({ error: 'Could not update the order status. Please try again.', code: 'STATUS_UPDATE_FAILED' });
+        }
+        const body = delivered.data && typeof delivered.data === 'object' ? { ...delivered.data } : {};
+        delete body.review_token;
+        if (delivered.reviewToken) body.review_token = delivered.reviewToken;
+        return res.status(200).json(body);
+      }
 
       const { data, error } = await supabase
         .from('orders')

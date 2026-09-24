@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Routes, Route, Link, NavLink, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Sun, Trash2, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleUser, Gauge, Gem, Image as ImageIcon, Instagram, Loader2, LogOut, Menu, MessageCircle, Minus, Moon, Package, Pencil, Plus, Search, ShoppingBag, Sparkles, Star, Sun, Trash2, TrendingUp, Truck, Users, X } from 'lucide-react';
 import { BRAND, SOCIAL, whatsappUrl, isExternalHref, categoryImageUrl, DEFAULT_HERO_ASSETS } from './lib/brand';
 import { money } from './lib/money';
 import { isValidCameroonPhone, isValidEmail } from './lib/phone';
@@ -596,6 +596,7 @@ function Home(){
           </section>
         )}
       </motion.div>
+      <CustomerReviews/>
       <section className="simple-contact">
         <div>
           <p className="eyebrow gold">{t('home.personalService')}</p>
@@ -1160,7 +1161,7 @@ function AdminShell({children}:{children:React.ReactNode}){
   const ThemeIcon = theme === 'light' ? Sun : Moon;
   const themeLabel = theme === 'light' ? t('header.themeDark') : t('header.themeLight');
   const logout=async()=>{clearAllProductDrafts();await supabase?.auth.signOut();nav('/admin/login')};
-  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button type="button" className="close-admin" onClick={()=>setOpen(false)} aria-label={t('common.close')}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink><NavLink to="/admin/customers"><Users/> {t('admin.navCustomers')}</NavLink></nav><button type="button" onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button type="button" onClick={()=>setOpen(true)} aria-label={t('header.menu')}><Menu/></button><div className="head-actions admin-head-actions"><button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button><button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button><span>{t('admin.shopManager')}</span><CircleUser aria-hidden="true"/></div></header>{children}</div></div>
+  return <div className="admin"><aside className={open?'open':''}><BrandMark className="inverse"/><button type="button" className="close-admin" onClick={()=>setOpen(false)} aria-label={t('common.close')}><X/></button><nav><NavLink to="/admin/dashboard"><Gauge/> {t('admin.navDashboard')}</NavLink><NavLink to="/admin/products"><Gem/> {t('admin.navProducts')}</NavLink><NavLink to="/admin/hero"><ImageIcon/> {t('admin.navHero')}</NavLink><NavLink to="/admin/orders"><Package/> {t('admin.navOrders')}</NavLink><NavLink to="/admin/customers"><Users/> {t('admin.navCustomers')}</NavLink><NavLink to="/admin/reviews"><Star/> {t('admin.navReviews')}</NavLink></nav><button type="button" onClick={logout}><LogOut/> {t('admin.signOut')}</button></aside><div className="admin-main"><header><button type="button" onClick={()=>setOpen(true)} aria-label={t('header.menu')}><Menu/></button><div className="head-actions admin-head-actions"><button type="button" className="head-icon head-lang" onClick={()=>setLang(lang==='fr'?'en':'fr')} aria-label={t('header.lang')}>{lang.toUpperCase()}</button><button type="button" className="head-icon" onClick={toggle} aria-label={themeLabel} title={themeLabel}><ThemeIcon/></button><span>{t('admin.shopManager')}</span><CircleUser aria-hidden="true"/></div></header>{children}</div></div>
 }
 function AdminDashboard(){
   const [data,setData]=useState<any>(null);
@@ -2100,6 +2101,7 @@ function OrderDrawer({order,token,close,done}:any){
   const [busyAction,setBusyAction]=useState<'confirm'|''>('');
   const [error,setError]=useState('');
   const [toast,setToast]=useState('');
+  const [reviewToken,setReviewToken]=useState('');
   const {t}=useI18n();
   const {session}=useAuth();
   const customer=order.customer||{};
@@ -2141,10 +2143,15 @@ function OrderDrawer({order,token,close,done}:any){
     const nextStatus=next||status;
     setBusy(true);setError('');
     try{
-      await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({id:order.id,status:nextStatus})});
+      const d=await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({id:order.id,status:nextStatus})});
       setStatus(nextStatus);
-      setToast(t('admin.statusUpdated'));
-      window.setTimeout(()=>done(),500);
+      if(d?.review_token){
+        setReviewToken(String(d.review_token));
+        setToast(t('admin.reviewLinkReady'));
+      }else{
+        setToast(t('admin.statusUpdated'));
+        window.setTimeout(()=>done(),500);
+      }
     }catch{
       setError(t('admin.statusUpdateError'));
     }finally{
@@ -2199,6 +2206,18 @@ function OrderDrawer({order,token,close,done}:any){
     }
   };
 
+  const createReviewLink=async()=>{
+    setBusy(true);setError('');
+    try{
+      const d=await api('/api/reviews',{method:'POST',headers:authHeaders(token),body:JSON.stringify({action:'regenerate',order_id:order.id})});
+      if(d?.review_token)setReviewToken(String(d.review_token));
+    }catch(err:any){
+      setError(err?.code==='REVIEW_ALREADY_SUBMITTED'?t('admin.reviewAlreadySent'):t('admin.reviewLinkError'));
+    }finally{
+      setBusy(false);
+    }
+  };
+
   const addProduct=()=>{
     const product=catalog.find(p=>String(p.id)===addId);
     if(!product||product.active===false||product.hidden)return;
@@ -2221,6 +2240,9 @@ function OrderDrawer({order,token,close,done}:any){
 
   const customerWa=(phone||SOCIAL.whatsappNumber).replace(/\D/g,'');
   const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+order.order_number)}`;
+  const reviewUrl=reviewToken?`${window.location.origin}/review/${reviewToken}`:'';
+  const deliveryMessage=reviewToken?`${t('admin.waMessagePrefix')} ${order.order_number}\n\n${t('admin.reviewInviteBody', reviewUrl)}`:'';
+  const deliveryWa=reviewToken?`https://wa.me/${customerWa}?text=${encodeURIComponent(deliveryMessage)}`:'';
   const addable=catalog.filter(p=>p.active!==false&&!p.hidden);
   return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title">
     <div className="modal-head"><div><p className="eyebrow gold">{order.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div>
@@ -2239,6 +2261,16 @@ function OrderDrawer({order,token,close,done}:any){
     {!editable?<label className="status-field">{t('admin.status')}<select value={status} onChange={e=>setStatus(e.target.value)}>{statusOptions.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label>:null}
     {error&&<p className="error order-action-error" role="alert">{error}</p>}
     {toast&&<p className="fine" role="status">{toast}</p>}
+    {status==='Delivered'&&!editable?<div className="delivery-review">
+      {reviewToken?<>
+        <p className="fine">{t('admin.reviewLinkReady')}</p>
+        <pre>{deliveryMessage}</pre>
+        <a className="btn gold-btn" href={deliveryWa} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.openReviewWhatsApp')}</a>
+      </>:<>
+        <p className="fine">{t('admin.regenerateReviewHint')}</p>
+        <button type="button" className="btn dark-btn" onClick={createReviewLink} disabled={busy}>{t('admin.regenerateReviewLink')}</button>
+      </>}
+    </div>:null}
     <div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a></div>
     <div className="modal-actions">
       {editable?<>
@@ -2316,6 +2348,188 @@ function CustomerDrawer({customer,close}:any){
     )):<p className="fine">{t('admin.noCustomerOrders')}</p>}</div>
   </aside></div>;
 }
+function useReviewPrivacy(){
+  const {t}=useI18n();
+  const title=t('review.title');
+  useEffect(()=>{
+    const robots=document.createElement('meta');
+    robots.name='robots';
+    robots.content='noindex, nofollow, noarchive';
+    const referrer=document.createElement('meta');
+    referrer.name='referrer';
+    referrer.content='no-referrer';
+    document.head.appendChild(robots);
+    document.head.appendChild(referrer);
+    const previous=document.title;
+    document.title=title;
+    return()=>{robots.remove();referrer.remove();document.title=previous;};
+  },[title]);
+}
+function StarPicker({value,onChange}:{value:number;onChange:(n:number)=>void}){
+  const {t}=useI18n();
+  return <div className="star-row" role="radiogroup" aria-label={t('review.ratingLabel')}>
+    {[1,2,3,4,5].map(n=>(
+      <button key={n} type="button" role="radio" aria-checked={value===n} aria-label={t('review.starLabel', n)} className={n<=value?'on':''} onClick={()=>onChange(n)}>★</button>
+    ))}
+  </div>;
+}
+function StarReadout({value}:{value:number}){
+  const safe=Math.max(0, Math.min(5, Number(value)||0));
+  return <span className="star-readout" aria-hidden="true">{'★'.repeat(safe)}{'☆'.repeat(5-safe)}</span>;
+}
+function CustomerReviews(){
+  const [rows,setRows]=useState<any[]>([]);
+  const {t}=useI18n();
+  useEffect(()=>{
+    api('/api/reviews')
+      .then(d=>setRows(Array.isArray(d)?d:[]))
+      .catch(()=>setRows([]));
+  },[]);
+  if(!rows.length)return null;
+  return <section className="public-reviews">
+    <div className="section-head"><div><p className="eyebrow gold">{t('review.publicEyebrow')}</p><h2>{t('review.publicTitle')}</h2></div></div>
+    <div className="public-review-grid">
+      {rows.map((row,i)=>(
+        <article key={`${row.approved_at||'review'}-${i}`}>
+          <StarReadout value={row.rating}/>
+          {row.comment?<p>{row.comment}</p>:null}
+          <span>{row.display_name||t('review.anonymous')}</span>
+        </article>
+      ))}
+    </div>
+  </section>;
+}
+function ReviewPage(){
+  const {token=''}=useParams();
+  const [phase,setPhase]=useState<'loading'|'form'|'done'|'unavailable'>('loading');
+  const [rating,setRating]=useState(0);
+  const [comment,setComment]=useState('');
+  const [displayName,setDisplayName]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const {t}=useI18n();
+  useReviewPrivacy();
+  useEffect(()=>{
+    let cancelled=false;
+    setPhase('loading');
+    api('/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'lookup',token})})
+      .then(d=>{if(!cancelled)setPhase(d?.available?'form':'unavailable');})
+      .catch(()=>{if(!cancelled)setPhase('unavailable');});
+    return()=>{cancelled=true;};
+  },[token]);
+  const submit=async(e:FormEvent)=>{
+    e.preventDefault();
+    if(busy||rating<1)return;
+    setBusy(true);setError('');
+    try{
+      await api('/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        token,
+        rating,
+        comment,
+        display_name:displayName,
+      })});
+      setPhase('done');
+    }catch(err:any){
+      if(err?.code==='REVIEW_UNAVAILABLE')setPhase('unavailable');
+      else setError(t('review.invalid'));
+    }finally{
+      setBusy(false);
+    }
+  };
+  return <main className="review-page">
+    <BrandMark/>
+    <div className="review-wrap">
+      {phase==='loading'?<Loading/>:null}
+      {phase==='unavailable'?<section className="review-card"><p className="eyebrow gold">{t('review.eyebrow')}</p><h1>{t('review.unavailableTitle')}</h1><p>{t('review.unavailableBody')}</p></section>:null}
+      {phase==='done'?<section className="review-card"><p className="eyebrow gold">{t('review.eyebrow')}</p><h1>{t('review.thanksTitle')}</h1><p>{t('review.thanksBody')}</p></section>:null}
+      {phase==='form'?<form className="review-card" onSubmit={submit} autoComplete="off">
+        <p className="eyebrow gold">{t('review.eyebrow')}</p>
+        <h1>{t('review.title')}</h1>
+        <p>{t('review.subtitle')}</p>
+        <label>{t('review.ratingLabel')}<StarPicker value={rating} onChange={setRating}/></label>
+        <label>{t('review.commentLabel')}<textarea value={comment} maxLength={1000} onChange={e=>setComment(e.target.value)} placeholder={t('review.commentPlaceholder')}/></label>
+        <label>{t('review.nameLabel')}<input value={displayName} maxLength={80} onChange={e=>setDisplayName(e.target.value)} placeholder={t('review.namePlaceholder')} autoComplete="off"/></label>
+        {error?<p className="error" role="alert">{error}</p>:null}
+        <button className="btn gold-btn" type="submit" disabled={busy||rating<1}>{busy?<Loader2 className="spin"/>:null} {busy?t('review.submitting'):t('review.submit')}</button>
+      </form>:null}
+    </div>
+  </main>;
+}
+function reviewStatusLabel(status:string, t:(key:string)=>string){
+  if(status==='approved')return t('admin.reviewApproved');
+  if(status==='rejected')return t('admin.reviewRejected');
+  if(status==='invited')return t('admin.reviewInvited');
+  return t('admin.reviewPending');
+}
+function AdminReviews(){
+  const [rows,setRows]=useState<any[]>([]);
+  const [filter,setFilter]=useState('pending');
+  const [error,setError]=useState('');
+  const [toast,setToast]=useState('');
+  const [loading,setLoading]=useState(true);
+  const [busyId,setBusyId]=useState('');
+  const {session}=useAuth();
+  const {t}=useI18n();
+  const load=()=>{
+    if(!session?.access_token){setLoading(false);return;}
+    setLoading(true);
+    api(`/api/reviews?status=${encodeURIComponent(filter)}`,{headers:authHeaders(session.access_token)})
+      .then(d=>{setRows(Array.isArray(d)?d:[]);setError('');})
+      .catch(()=>setError(t('admin.reviewsLoadError')))
+      .finally(()=>setLoading(false));
+  };
+  useEffect(()=>{load()},[session?.access_token, filter]);
+  const moderate=async(id:string, action:'approve'|'reject'|'remove')=>{
+    setBusyId(id);setError('');
+    try{
+      await api('/api/reviews',{method:'PUT',headers:authHeaders(session?.access_token),body:JSON.stringify({id, action})});
+      setToast(t('admin.reviewModerated'));
+      load();
+    }catch{
+      setError(t('admin.reviewModerateError'));
+    }finally{
+      setBusyId('');
+    }
+  };
+  const filters=[
+    ['pending', t('admin.reviewFilterPending')],
+    ['approved', t('admin.reviewFilterApproved')],
+    ['rejected', t('admin.reviewFilterRejected')],
+    ['all', t('admin.reviewFilterAll')],
+  ];
+  return <AdminShell><section className="admin-content">
+    <div className="admin-title"><div><p className="eyebrow gold">{t('admin.reviewsEyebrow')}</p><h1>{t('admin.reviewsTitle')}</h1></div></div>
+    {error&&<p className="error" role="alert">{error}</p>}
+    <div className="review-filters" role="group">
+      {filters.map(([id,label])=><button type="button" key={id} className={filter===id?'on':''} onClick={()=>setFilter(id)}>{label}</button>)}
+    </div>
+    {loading?<Loading/>:<div className="review-admin-list">
+      {rows.map(row=>(
+        <article key={row.id}>
+          <div>
+            <b>{row.order_number||'—'}</b>
+            <span>{row.customer_name||t('admin.whatsappClient')}</span>
+          </div>
+          <div>
+            {row.rating?<StarReadout value={row.rating}/>:<span className="fine">{reviewStatusLabel(row.status, t)}</span>}
+            <small>{reviewStatusLabel(row.status, t)}</small>
+          </div>
+          <p>{row.comment||'—'}</p>
+          <span className="fine">{row.display_name||t('review.anonymous')}</span>
+          <div className="modal-actions">
+            {row.status==='pending'?<>
+              <button type="button" className="btn gold-btn" disabled={busyId===row.id} onClick={()=>moderate(row.id,'approve')}>{t('admin.reviewApprove')}</button>
+              <button type="button" className="danger" disabled={busyId===row.id} onClick={()=>moderate(row.id,'reject')}>{t('admin.reviewReject')}</button>
+            </>:null}
+            {row.status==='approved'?<button type="button" className="danger" disabled={busyId===row.id} onClick={()=>moderate(row.id,'remove')}>{t('admin.reviewRemove')}</button>:null}
+          </div>
+        </article>
+      ))}
+    </div>}
+    {!loading&&!rows.length?<Empty text={t('admin.reviewsEmpty')}/>:null}
+    <AnimatePresence>{toast&&<Toast text={toast} onClose={()=>setToast('')}/>}</AnimatePresence>
+  </section></AdminShell>;
+}
 export default function App(){
-  return <ThemeProvider><I18nProvider><GaRouteTracker/><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="/admin/customers" element={<Protected><AdminCustomers/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
+  return <ThemeProvider><I18nProvider><GaRouteTracker/><Routes><Route path="/" element={<Home/>}/><Route path="/shop" element={<Shop/>}/><Route path="/product/:slug" element={<ProductDetail/>}/><Route path="/cart" element={<Cart/>}/><Route path="/review/:token" element={<ReviewPage/>}/><Route path="/admin/login" element={<Login/>}/><Route path="/admin" element={<Protected><Navigate to="/admin/dashboard" replace/></Protected>}/><Route path="/admin/dashboard" element={<Protected><AdminDashboard/></Protected>}/><Route path="/admin/products" element={<Protected><AdminProducts/></Protected>}/><Route path="/admin/hero" element={<Protected><AdminHero/></Protected>}/><Route path="/admin/orders" element={<Protected><AdminOrders/></Protected>}/><Route path="/admin/reviews" element={<Protected><AdminReviews/></Protected>}/><Route path="/admin/customers" element={<Protected><AdminCustomers/></Protected>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></I18nProvider></ThemeProvider>
 }
