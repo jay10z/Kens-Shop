@@ -1,7 +1,7 @@
 import supabase from './_lib/db-client.js';
 import { requireAdmin } from './_lib/adminAuth.js';
 import { isValidCameroonPhone, isValidEmail, normalizeCameroonPhone } from './_lib/phone.js';
-import { isKnownOrderStatus, statusForStorage } from './_lib/orderStatus.js';
+import { evaluateStatusUpdate, isKnownOrderStatus } from './_lib/orderStatus.js';
 
 const cors = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,27 +33,27 @@ function friendlyOrderError(error) {
   const missing = missingColumnFromError(error);
   if (missing === 'product_name') {
     return {
-      error: 'We could not reserve your order. Please try again shortly.',
+      error: 'We could not save your order. Please try again shortly.',
       code: 'SCHEMA_ORDER_ITEMS',
       migrationRequired: true,
     };
   }
   if (missing === 'customers' || missing === 'customer_id' || missing === 'normalized_phone') {
     return {
-      error: 'We could not reserve your order. Please try again shortly.',
+      error: 'We could not save your order. Please try again shortly.',
       code: 'SCHEMA_CUSTOMERS',
       migrationRequired: true,
     };
   }
   if (missing) {
     return {
-      error: 'We could not reserve your order. Please try again shortly.',
+      error: 'We could not save your order. Please try again shortly.',
       code: 'SCHEMA_ORDER_ITEMS',
       missingColumn: missing,
     };
   }
   return {
-    error: 'We could not reserve your order. Please try again.',
+    error: 'We could not save your order. Please try again.',
     code: 'ORDER_CREATE_FAILED',
   };
 }
@@ -69,17 +69,65 @@ const ORDER_VALIDATION_CODES = new Set([
   'INSUFFICIENT_STOCK',
   'INVALID_QUANTITY',
   'INVALID_CART',
+  'ORDER_NOT_PENDING',
+  'ORDER_NOT_FOUND',
+  'LEGACY_RESERVED_ORDER',
 ]);
 
 function extractOrderRpcCode(error) {
-  const msg = String(error?.message || error?.details || error?.hint || '');
+  const message = String(error?.message || '');
   for (const code of ORDER_VALIDATION_CODES) {
-    if (msg === code || msg.startsWith(`${code}:`) || msg.includes(code)) return code;
+    if (message === code || message.startsWith(`${code}:`) || message.includes(code)) return code;
   }
-  if (/Could not find the function|schema cache|create_order_with_stock/i.test(msg)) {
-    return 'SCHEMA_ORDER_RESERVATION';
+  const fallback = String(error?.details || error?.hint || '');
+  if (/Could not find the function|schema cache|create_pending_order|update_pending_order|confirm_pending_order|create_order_with_stock/i.test(`${message} ${fallback}`)) {
+    return 'SCHEMA_ORDER_LIFECYCLE';
   }
   return null;
+}
+
+function parseRpcProducts(error) {
+  const raw = error?.details ?? error?.detail ?? '';
+  if (typeof raw !== 'string' || !raw.trim().startsWith('[')) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function rpcFailureResponse(error, fallbackCode = 'ORDER_UPDATE_FAILED') {
+  const code = extractOrderRpcCode(error) || fallbackCode;
+  const products = parseRpcProducts(error);
+  const messages = {
+    PRODUCT_NOT_FOUND: 'One or more products are no longer available.',
+    PRODUCT_INACTIVE: 'One or more products are no longer for sale.',
+    PRODUCT_HIDDEN: 'One or more products are no longer available.',
+    INSUFFICIENT_STOCK: 'Not enough stock for one or more items.',
+    INVALID_QUANTITY: 'Invalid quantity.',
+    INVALID_CART: 'The order is invalid.',
+    ORDER_NOT_PENDING: 'This order is no longer pending.',
+    ORDER_NOT_FOUND: 'Order not found.',
+    LEGACY_RESERVED_ORDER: 'This order was created before confirmation-time stock updates and cannot be edited or confirmed automatically.',
+    SCHEMA_ORDER_LIFECYCLE: 'We could not update the order. Please try again shortly.',
+  };
+  const status = code === 'ORDER_NOT_FOUND'
+    ? 404
+    : code === 'ORDER_NOT_PENDING' || code === 'LEGACY_RESERVED_ORDER'
+      ? 409
+      : code === 'SCHEMA_ORDER_LIFECYCLE'
+        ? 500
+        : 400;
+  return {
+    status,
+    body: {
+      error: messages[code] || 'The order could not be updated.',
+      code,
+      ...(products.length ? { products } : {}),
+      ...(code === 'SCHEMA_ORDER_LIFECYCLE' ? { migrationRequired: true } : {}),
+    },
+  };
 }
 
 function friendlyReservationError(error) {
@@ -99,11 +147,11 @@ function friendlyReservationError(error) {
   if (code === 'INVALID_CART') {
     return { status: 400, body: { error: 'Your cart is invalid. Please refresh and try again.', code } };
   }
-  if (code === 'SCHEMA_ORDER_RESERVATION') {
+  if (code === 'SCHEMA_ORDER_LIFECYCLE' || code === 'SCHEMA_ORDER_RESERVATION') {
     return {
       status: 500,
       body: {
-        error: 'We could not reserve your order. Please try again shortly.',
+        error: 'We could not save your order. Please try again shortly.',
         code,
         migrationRequired: true,
       },
@@ -150,8 +198,8 @@ function makeOrderNumber() {
   return `KS-${new Date().toISOString().slice(2, 10).replaceAll('-', '')}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-async function reserveOrderWithStock({ customer, items, orderNumber }) {
-  const { data, error } = await supabase.rpc('create_order_with_stock', {
+async function createPendingOrder({ customer, items, orderNumber }) {
+  const { data, error } = await supabase.rpc('create_pending_order', {
     p_customer_id: customer.id,
     p_customer_name: customer.full_name,
     p_whatsapp_number: customer.phone,
@@ -292,7 +340,7 @@ export default async function handler(req, res) {
       }
 
       let orderNumber = makeOrderNumber();
-      let { data: reserved, error: reserveError } = await reserveOrderWithStock({
+      let { data: reserved, error: reserveError } = await createPendingOrder({
         customer,
         items: normalized.items,
         orderNumber,
@@ -301,7 +349,7 @@ export default async function handler(req, res) {
       // Rare order_number collision — retry once with a new number.
       if (reserveError && isUniqueViolation(reserveError)) {
         orderNumber = makeOrderNumber();
-        ({ data: reserved, error: reserveError } = await reserveOrderWithStock({
+        ({ data: reserved, error: reserveError } = await createPendingOrder({
           customer,
           items: normalized.items,
           orderNumber,
@@ -309,37 +357,12 @@ export default async function handler(req, res) {
       }
 
       if (reserveError || !reserved?.order_number) {
-        console.error('[orders] reserve:', reserveError?.message || reserveError || 'empty reservation');
+        console.error('[orders] create pending:', reserveError?.message || reserveError || 'empty order');
         const mapped = friendlyReservationError(reserveError || { message: 'ORDER_CREATE_FAILED' });
         return res.status(mapped.status).json(mapped.body);
       }
 
       const orderItems = Array.isArray(reserved.items) ? reserved.items : [];
-
-      // Best-effort analytics AFTER successful reservation (not part of the stock transaction).
-      try {
-        const events = orderItems.map((x) => ({
-          product_id: x.product_id,
-          event_type: 'purchase',
-        }));
-        if (events.length) await supabase.from('product_events').insert(events);
-
-        for (const item of orderItems) {
-          const { data: p } = await supabase
-            .from('products')
-            .select('purchase_count')
-            .eq('id', item.product_id)
-            .single();
-          if (p) {
-            await supabase
-              .from('products')
-              .update({ purchase_count: (p.purchase_count || 0) + Number(item.quantity || 0) })
-              .eq('id', item.product_id);
-          }
-        }
-      } catch (analyticsErr) {
-        console.error('[orders] purchase analytics (non-fatal):', analyticsErr?.message || analyticsErr);
-      }
 
       return res.status(201).json({
         id: reserved.id,
@@ -391,19 +414,75 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PUT') {
-      const { id, status } = req.body || {};
+      const { id, status, action, items } = req.body || {};
       if (!id) return res.status(400).json({ error: 'Missing order.', code: 'INVALID_ORDER' });
+
+      if (action === 'edit_items') {
+        const normalized = buildReservationItems(items);
+        if (!normalized.ok) return res.status(normalized.status).json(normalized.body);
+        const { data, error } = await supabase.rpc('update_pending_order', {
+          p_order_id: id,
+          p_items: normalized.items.map(({ product_id, quantity }) => ({ product_id, quantity })),
+        });
+        if (error || !data?.id) {
+          console.error('[orders] edit:', error?.message || error || 'empty edit');
+          const mapped = rpcFailureResponse(error || { message: 'ORDER_UPDATE_FAILED' });
+          return res.status(mapped.status).json(mapped.body);
+        }
+        return res.status(200).json(data);
+      }
+
+      if (action === 'confirm') {
+        const { data, error } = await supabase.rpc('confirm_pending_order', {
+          p_order_id: id,
+        });
+        if (error || !data?.id) {
+          console.error('[orders] confirm:', error?.message || error || 'empty confirm');
+          const mapped = rpcFailureResponse(error || { message: 'ORDER_UPDATE_FAILED' });
+          return res.status(mapped.status).json(mapped.body);
+        }
+        return res.status(200).json(data);
+      }
+
+      if (action) {
+        return res.status(400).json({ error: 'Unknown order action.', code: 'INVALID_ACTION' });
+      }
+
       if (!isKnownOrderStatus(status)) {
         return res.status(400).json({ error: 'Invalid order status.', code: 'INVALID_STATUS' });
       }
-      const nextStatus = statusForStorage(status);
-      if (!nextStatus) {
-        return res.status(400).json({ error: 'Invalid order status.', code: 'INVALID_STATUS' });
+
+      let existing = null;
+      let loadError = null;
+      ({ data: existing, error: loadError } = await supabase
+        .from('orders')
+        .select('id,status,stock_policy')
+        .eq('id', id)
+        .maybeSingle());
+      if (loadError && /stock_policy/i.test(loadError.message || '')) {
+        ({ data: existing, error: loadError } = await supabase
+          .from('orders')
+          .select('id,status')
+          .eq('id', id)
+          .maybeSingle());
       }
+      if (loadError) {
+        console.error('[orders] status load:', loadError.message || loadError);
+        return res.status(500).json({ error: 'Could not update the order status. Please try again.', code: 'STATUS_UPDATE_FAILED' });
+      }
+      if (!existing?.id) {
+        return res.status(404).json({ error: 'Order not found.', code: 'ORDER_NOT_FOUND' });
+      }
+
+      const decision = evaluateStatusUpdate(existing.status, status, existing.stock_policy);
+      if (!decision.ok) {
+        return res.status(decision.http).json({ error: decision.error, code: decision.code });
+      }
+      if (decision.noop) return res.status(200).json(existing);
 
       const { data, error } = await supabase
         .from('orders')
-        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .update({ status: decision.next, updated_at: new Date().toISOString() })
         .eq('id', id)
         .select()
         .single();

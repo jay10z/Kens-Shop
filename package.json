@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:orders": "node scripts/test-order-lifecycle.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

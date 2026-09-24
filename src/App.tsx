@@ -33,7 +33,6 @@ import {
   GaRouteTracker,
   trackAddToCart,
   trackBeginCheckout,
-  trackPurchase,
   trackViewItem,
 } from './lib/analytics';
 import {
@@ -99,6 +98,7 @@ async function api(path:string, options?:RequestInit & {timeoutMs?:number}){
     if(!r.ok){
       const err:any=new Error(d?.error||'Something went wrong');
       if(d?.code)err.code=d.code;
+      if(Array.isArray(d?.products))err.products=d.products;
       throw err;
     }
     return d;
@@ -909,16 +909,6 @@ function Cart(){
       const serverItems=Array.isArray(d.items)?d.items:[];
       const serverTotal=Number(d.total);
       if(!serverItems.length||!Number.isFinite(serverTotal))throw new Error(t('cart.orderError'));
-
-      trackPurchase({
-        value: serverTotal,
-        items: serverItems.map((x:any)=>({
-          id: x.product_id,
-          name: x.product_name,
-          price: Number(x.price),
-          quantity: Number(x.quantity) || 1,
-        })),
-      });
 
       const message=buildWhatsAppOrderMessage({
         orderNumber:d.order_number,
@@ -2067,17 +2057,87 @@ function AdminOrders(){
     {selected&&<OrderDrawer order={selected} token={session?.access_token} close={()=>setSelected(null)} done={()=>{setSelected(null);load()}}/>}
   </section></AdminShell>;
 }
+function lineSignature(lines:Array<{product_id:string;quantity:number}>){
+  return lines.map(x=>`${x.product_id}:${Number(x.quantity)||0}`).sort().join('|');
+}
+function aggregateOrderLines(items:any[]){
+  const map=new Map<string,any>();
+  for(const item of items||[]){
+    if(!item?.product_id)continue;
+    const id=String(item.product_id);
+    const qty=Number(item.quantity)||0;
+    const prev=map.get(id);
+    if(!prev){
+      map.set(id,{
+        key:id,
+        product_id:id,
+        product_name:item.product_name||item.product?.name||'',
+        quantity:qty,
+        price:Number(item.price)||0,
+        color:item.color||'',
+        model:item.model||'',
+        image:productCoverImage(item.product?.images),
+      });
+    }else{
+      prev.quantity+=qty;
+      if(!prev.color&&item.color)prev.color=item.color;
+      if(!prev.model&&item.model)prev.model=item.model;
+      if(!prev.image)prev.image=productCoverImage(item.product?.images);
+    }
+  }
+  return [...map.values()];
+}
 function OrderDrawer({order,token,close,done}:any){
-  const [status,setStatus]=useState(toCanonicalStatus(order.status));
+  const initialStatus=toCanonicalStatus(order.status);
+  const editable=initialStatus==='Pending'&&order.stock_policy==='on_confirm';
+  const legacyPending=initialStatus==='Pending'&&order.stock_policy!=='on_confirm';
+  const [status,setStatus]=useState(initialStatus);
+  const [lines,setLines]=useState(()=>aggregateOrderLines(order.items));
+  const [savedSig,setSavedSig]=useState(()=>lineSignature(aggregateOrderLines(order.items)));
+  const [catalog,setCatalog]=useState<any[]>([]);
+  const [addId,setAddId]=useState('');
   const [busy,setBusy]=useState(false);
+  const [busyAction,setBusyAction]=useState<'confirm'|''>('');
   const [error,setError]=useState('');
   const [toast,setToast]=useState('');
   const {t}=useI18n();
+  const {session}=useAuth();
   const customer=order.customer||{};
   const name=order.customer_name||customer.full_name||t('admin.whatsappClient');
   const phone=order.whatsapp_number||customer.phone||'';
   const email=order.user_email||customer.email||'';
-  const save=async(next?:string)=>{
+  const dirty=lineSignature(lines)!==savedSig;
+  const previewTotal=lines.reduce((sum,line)=>sum+Number(line.price)*Number(line.quantity),0);
+  const phase12=order.stock_policy==='on_confirm';
+  const statusOptions=phase12
+    ? ORDER_STATUSES.filter(s=>(s!=='Confirmed'||status==='Confirmed')&&(s!=='Pending'||status==='Pending'))
+    : ORDER_STATUSES;
+
+  useEffect(()=>{
+    if(!editable||!session?.access_token)return;
+    api('/api/products?admin=true',{headers:authHeaders(session.access_token)})
+      .then(d=>setCatalog(Array.isArray(d)?d:[]))
+      .catch(()=>setCatalog([]));
+  },[editable,session?.access_token]);
+
+  const describeFailure=(err:any)=>{
+    const products=Array.isArray(err?.products)?err.products:[];
+    const head=err?.code==='INSUFFICIENT_STOCK'?t('admin.confirmFailed')
+      :err?.code==='PRODUCT_INACTIVE'?t('admin.productInactive')
+      :err?.code==='PRODUCT_HIDDEN'?t('admin.productHidden')
+      :err?.code==='PRODUCT_NOT_FOUND'?t('admin.productMissing')
+      :err?.code==='LEGACY_RESERVED_ORDER'?t('admin.legacyPendingNote')
+      :err?.code==='ORDER_NOT_PENDING'?t('admin.notPending')
+      :err?.code==='INVALID_QUANTITY'?t('admin.editOrderError')
+      :t('admin.confirmFailed');
+    const detail=products.map((p:any)=>{
+      if(p.code==='INSUFFICIENT_STOCK')return t('admin.insufficientLine',p.product_name||'—',p.requested,p.available);
+      return p.product_name||p.product_id||'';
+    }).filter(Boolean);
+    return [head,...detail].join('\n');
+  };
+
+  const saveStatus=async(next?:string)=>{
     const nextStatus=next||status;
     setBusy(true);setError('');
     try{
@@ -2091,24 +2151,106 @@ function OrderDrawer({order,token,close,done}:any){
       setBusy(false);
     }
   };
+
+  const saveItems=async()=>{
+    if(!lines.length){
+      setError(t('admin.editOrderError'));
+      return;
+    }
+    setBusy(true);setError('');
+    try{
+      const d=await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({
+        id:order.id,
+        action:'edit_items',
+        items:lines.map(line=>({product_id:line.product_id,quantity:Number(line.quantity)})),
+      })});
+      const next=aggregateOrderLines(d.items||[]).map(line=>{
+        const prev=lines.find(row=>row.product_id===line.product_id);
+        return {...line,image:line.image||prev?.image||'',color:line.color||prev?.color||'',model:line.model||prev?.model||''};
+      });
+      setLines(next);
+      setSavedSig(lineSignature(next));
+      setToast(t('admin.orderItemsSaved'));
+    }catch(err:any){
+      setError(describeFailure(err)||t('admin.editOrderError'));
+    }finally{
+      setBusy(false);
+    }
+  };
+
+  const confirmOrder=async()=>{
+    if(dirty){
+      setError(t('admin.unsavedBeforeConfirm'));
+      return;
+    }
+    setBusy(true);setBusyAction('confirm');setError('');
+    try{
+      const d=await api('/api/orders',{method:'PUT',headers:authHeaders(token),body:JSON.stringify({id:order.id,action:'confirm'})});
+      const serverItems=Array.isArray(d.items)?d.items:[];
+      setStatus('Confirmed');
+      setLines(aggregateOrderLines(serverItems));
+      setToast(t('admin.orderConfirmed'));
+      window.setTimeout(()=>done(),500);
+    }catch(err:any){
+      setError(describeFailure(err));
+    }finally{
+      setBusy(false);
+      setBusyAction('');
+    }
+  };
+
+  const addProduct=()=>{
+    const product=catalog.find(p=>String(p.id)===addId);
+    if(!product||product.active===false||product.hidden)return;
+    setLines(current=>{
+      const id=String(product.id);
+      const existing=current.find(line=>line.product_id===id);
+      if(existing)return current.map(line=>line.product_id===id?{...line,quantity:line.quantity+1}:line);
+      return [...current,{
+        key:id,
+        product_id:id,
+        product_name:product.name,
+        quantity:1,
+        price:Number(product.price)||0,
+        image:productCoverImage(product.images),
+      }];
+    });
+    setAddId('');
+    setError('');
+  };
+
   const customerWa=(phone||SOCIAL.whatsappNumber).replace(/\D/g,'');
   const waHref=`https://wa.me/${customerWa}?text=${encodeURIComponent(t('admin.waMessagePrefix')+' '+order.order_number)}`;
+  const addable=catalog.filter(p=>p.active!==false&&!p.hidden);
   return <div className="drawer-bg" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="order-drawer-title">
     <div className="modal-head"><div><p className="eyebrow gold">{order.order_number}</p><h2 id="order-drawer-title">{t('admin.orderDetails')}</h2></div><button type="button" onClick={close} aria-label={t('common.close')}><X/></button></div>
     <Status status={status}/>
+    {legacyPending?<p className="legacy-note">{t('admin.legacyPendingNote')}</p>:null}
     <div className="profile-block">
       <h3>{t('admin.customerInfo')}</h3>
       <p><b>{name}</b></p>
       <p>{phone||'—'}</p>
       {email?<p>{email}</p>:null}
     </div>
-    <div className="drawer-items">{(order.items||[]).map((x:any,i:number)=><div key={i}><ProductImage src={productCoverImage(x.product?.images)} alt=""/><span><b>{x.product_name||x.product?.name||'—'}</b><small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity} · {t('admin.unitPrice')} {money(x.price)}</small></span><strong>{money(Number(x.price)*Number(x.quantity))}</strong></div>)}</div>
-    <div className="drawer-total"><span>{t('cart.total')}</span><b>{money(order.total)}</b></div>
-    <label className="status-field">{t('admin.status')}<select value={status} onChange={e=>setStatus(e.target.value)}>{ORDER_STATUSES.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label>
-    {error&&<p className="error" role="alert">{error}</p>}
+    <div className="drawer-items">{lines.map(x=><div key={x.key}><ProductImage src={x.image} alt=""/><span><b>{x.product_name||'—'}</b>{editable?<small>{[x.color,x.model].filter(Boolean).join(' · ')}{[x.color,x.model].some(Boolean)?' · ':''}{t('admin.unitPrice')} {money(x.price)}</small>:<small>{[x.color,x.model].filter(Boolean).join(' · ')} · {t('admin.qty')} {x.quantity} · {t('admin.unitPrice')} {money(x.price)}</small>}{editable?<div className="quantity"><button type="button" onClick={()=>setLines(rows=>rows.map(line=>line.key===x.key?{...line,quantity:Math.max(1,line.quantity-1)}:line))} aria-label={t('common.decreaseQty')} disabled={busy}><Minus/></button><span>{x.quantity}</span><button type="button" onClick={()=>setLines(rows=>rows.map(line=>line.key===x.key?{...line,quantity:line.quantity+1}:line))} aria-label={t('common.increaseQty')} disabled={busy}><Plus/></button></div>:null}</span><div className="line-actions"><strong>{money(Number(x.price)*Number(x.quantity))}</strong>{editable?<button type="button" className="remove" onClick={()=>setLines(rows=>rows.filter(line=>line.key!==x.key))} aria-label={t('common.removeItem')} disabled={busy}><Trash2/></button>:null}</div></div>)}</div>
+    {editable?<div className="drawer-add"><select value={addId} onChange={e=>setAddId(e.target.value)} aria-label={t('admin.addProductToOrder')}><option value="">{t('admin.addProductToOrder')}</option>{addable.map(p=><option key={p.id} value={p.id}>{p.name} — {money(p.price)} ({p.stock_quantity})</option>)}</select><button type="button" className="btn dark-btn" onClick={addProduct} disabled={busy||!addId}>{t('admin.addToOrder')}</button></div>:null}
+    <div className="drawer-total"><span>{t('cart.total')}</span><b>{money(lines.length?previewTotal:order.total)}</b></div>
+    {editable?<p className="fine">{t('admin.totalOnSave')}</p>:null}
+    {!editable?<label className="status-field">{t('admin.status')}<select value={status} onChange={e=>setStatus(e.target.value)}>{statusOptions.map(s=><option key={s} value={s}>{t(`admin.orderStatuses.${s}`)||s}</option>)}</select></label>:null}
+    {error&&<p className="error order-action-error" role="alert">{error}</p>}
     {toast&&<p className="fine" role="status">{toast}</p>}
     <div className="quick"><a href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle/> {t('admin.drawer.openWhatsApp')}</a></div>
-    <div className="modal-actions"><button type="button" className="danger" onClick={()=>save('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button><button type="button" className="btn dark-btn" onClick={()=>save('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button><button type="button" className="btn gold-btn" onClick={()=>save()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button></div>
+    <div className="modal-actions">
+      {editable?<>
+        <button type="button" className="danger" onClick={()=>saveStatus('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button>
+        <button type="button" className="btn dark-btn" onClick={saveItems} disabled={busy||!dirty||!lines.length}>{busy?<Loader2 className="spin"/>:null} {t('admin.saveOrderChanges')}</button>
+        <button type="button" className="btn gold-btn" onClick={confirmOrder} disabled={busy||dirty}>{busyAction==='confirm'?<Loader2 className="spin"/>:<Check/>} {busyAction==='confirm'?t('admin.confirming'):t('admin.confirmOrder')}</button>
+      </>:<>
+        <button type="button" className="danger" onClick={()=>saveStatus('Cancelled')} disabled={busy}>{t('admin.cancelOrder')}</button>
+        <button type="button" className="btn dark-btn" onClick={()=>saveStatus('Delivered')} disabled={busy}>{t('admin.markDelivered')}</button>
+        <button type="button" className="btn gold-btn" onClick={()=>saveStatus()} disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>} {t('admin.save')}</button>
+      </>}
+    </div>
   </aside></div>;
 }
 function AdminCustomers(){

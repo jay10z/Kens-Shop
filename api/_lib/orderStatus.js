@@ -75,3 +75,48 @@ export function statusMatchesFilter(status, filter) {
   if (!filter || filter === 'All') return true;
   return toCanonicalStatus(status) === filter;
 }
+
+/**
+ * Generic status writes.
+ * Legacy orders (stock_policy null) keep the previous free transitions.
+ * on_confirm orders become Confirmed only through confirm_pending_order.
+ * A pending on_confirm order can be cancelled here, not moved past confirmation.
+ * Returning an on_confirm order to Pending is refused so confirmation cannot deduct stock twice.
+ */
+export function evaluateStatusUpdate(currentStatus, nextStatus, stockPolicy) {
+  const current = toCanonicalStatus(currentStatus);
+  const next = statusForStorage(nextStatus);
+  if (!next) {
+    return { ok: false, http: 400, code: 'INVALID_STATUS', error: 'Invalid order status.' };
+  }
+  if (next === 'Confirmed' && current === 'Confirmed') {
+    return { ok: true, noop: true, next };
+  }
+  if (stockPolicy === 'on_confirm') {
+    if (next === 'Confirmed') {
+      return {
+        ok: false,
+        http: 409,
+        code: 'CONFIRM_REQUIRED',
+        error: 'Use the confirm action to confirm an order.',
+      };
+    }
+    if (current === 'Pending' && next !== 'Cancelled' && next !== 'Pending') {
+      return {
+        ok: false,
+        http: 409,
+        code: 'CONFIRM_REQUIRED',
+        error: 'Confirm this order before changing its status. You can still cancel it.',
+      };
+    }
+    if (next === 'Pending' && current !== 'Pending') {
+      return {
+        ok: false,
+        http: 409,
+        code: 'CONFIRM_REQUIRED',
+        error: 'This order cannot be returned to pending.',
+      };
+    }
+  }
+  return { ok: true, next };
+}

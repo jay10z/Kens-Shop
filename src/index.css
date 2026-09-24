@@ -1445,6 +1445,12 @@ footer small { grid-column: 1/-1; border-top: 1px solid #292926; padding-top: 25
   display: flex; justify-content: space-between;
   background: var(--bg-alt); padding: 18px; margin-bottom: 30px;
 }
+.drawer-items .quantity button { width: 32px; height: 32px; }
+.drawer-items .line-actions { display: flex; align-items: center; gap: 8px; }
+.drawer-add { display: flex; gap: 8px; align-items: center; margin: 4px 0 16px; }
+.drawer-add select { flex: 1; min-width: 0; }
+.order-action-error { white-space: pre-line; }
+.legacy-note { margin: 12px 0; color: var(--fg-muted); line-height: 1.45; }
 .drawer h3 { font: 24px Italiana; color: var(--fg); }
 .quick { display: flex; gap: 8px; margin: 20px 0; flex-wrap: wrap; }
 .quick a, .quick button {
